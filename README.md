@@ -11,6 +11,9 @@ For use of `ICC.tgz`, please cite PrimatAI.
 # Run
 `python train.py --conf CONFIG.yaml`
 All config files were stored in `scripts/` folder.
+
+Here is the list of models in our manuscript:
+
 `scripts/CHPs.v1.SAGPool.ct/` PreMode
 
 `scripts/CHPs.v1.noGraph.SAGPool.ct/` PreMode-1D
