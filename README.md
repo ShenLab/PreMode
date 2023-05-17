@@ -1,5 +1,5 @@
 # PreMode
-This is the repository for our manuscript that submit to NeurIPS.
+This is the repository for our manuscript "Predicting mode of action of variants by graph representation of protein structural context" that submit to NeurIPS 2023.
 
 # Data
 Please unzip `MAVE.tgz`, `ICC.tgz`, `pathogenicity.tgz` and put them under your data directory.
@@ -8,7 +8,7 @@ For use of `MAVE.tgz`, please cite the MAVEDB.
 
 For use of `ICC.tgz`, please cite the original papers.
 
-For use of `ICC.tgz`, please cite PrimatAI.
+For use of `pathogenicity.tgz`, please cite PrimatAI.
 
 
 # Run
