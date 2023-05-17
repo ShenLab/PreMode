@@ -4,9 +4,9 @@ This is the repository for our manuscript "Predicting mode of action of variants
 # Data
 Please unzip `MAVE.tgz`, `ICC.tgz`, `pathogenicity.tgz` and put them under your data directory.
 
-For use of `MAVE.tgz`, please cite the MAVEDB. (DOI: 10.1186/s13059-019-1845-6)
+For use of `MAVE.tgz`, we curated from MAVEDB. (DOI: 10.1186/s13059-019-1845-6)
 
-For use of `ICC.tgz`, please cite these papers. (DOI: 10.1016/j.ajhg.2021.10.007; 10.1126/scitranslmed.aay6848; 10.1158/2159-8290.CD-17-0321; 10.1126/scisignal.2004088; 10.1093/nar/gky1015)
+For use of `ICC.tgz`, we curated from these papers and please cite us and them. (DOI: 10.1016/j.ajhg.2021.10.007; 10.1126/scitranslmed.aay6848; 10.1158/2159-8290.CD-17-0321; 10.1126/scisignal.2004088; 10.1093/nar/gky1015; 10.1089/gtmb.2010.0036; 10.1016/j.tibs.2019.03.009)
 
 For use of `pathogenicity.tgz`, please cite PrimatAI. (DOI: 10.1038/s41588-018-0167-z)
 
