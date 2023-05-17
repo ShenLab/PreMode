@@ -33,3 +33,5 @@ Here is the list of models in our manuscript:
 2. Run training in pathogenicity task: `python train.py --conf scripts/NEW_FOLDER/pretrain.seed.0.yaml`
 3. Prepare transfer learning config files: `bash scripts/DMS.prepare.yaml.sh scripts/NEW_FOLDER/`
 4. Run transfer learning: `bash scripts/DMS.run.sh scripts/NEW_FOLDER TASK_NAME GPU_ID`
+5. Plot results for GoF/LoF mode of action tasks: `Rscript ICC.test.AUC.by.step.R scripts/NEW_FOLDER/`
+6. Plot results for partial Loss of function mode of action tasks: `Rscript MAVE.test.R.by.step.R scripts/NEW_FOLDER/`
