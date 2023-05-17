@@ -28,3 +28,8 @@ Here is the list of models in our manuscript:
 
 `scripts/CHPs.v1.swissprot.noGraph.SAGPool.ct/` PreMode-onehot-1D (parameters initialized from pretrain on swissprot)
 
+# New Experiment
+1. Please prepare a folder under `scripts/` and create a file named `pretrain.seed.0.yaml` inside the folder:
+2. Run training in pathogenicity task: `python train.py --conf scripts/NEW_FOLDER/pretrain.seed.0.yaml`
+3. Prepare transfer learning config files: `bash scripts/DMS.prepare.yaml.sh scripts/NEW_FOLDER/`
+4. Run transfer learning: `bash scripts/DMS.run.sh scripts/NEW_FOLDER TASK_NAME GPU_ID`
