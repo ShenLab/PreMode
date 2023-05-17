@@ -4,25 +4,11 @@ This is the repository for our manuscript "Predicting mode of action of variants
 # Data
 Please unzip `MAVE.tgz`, `ICC.tgz`, `pathogenicity.tgz` and put them under your data directory.
 
-For use of `MAVE.tgz`, please cite the MAVEDB.
-@article{RN36,
-   author = {Esposito, D. and Weile, J. and Shendure, J. and Starita, L. M. and Papenfuss, A. T. and Roth, F. P. and Fowler, D. M. and Rubin, A. F.},
-   title = {MaveDB: an open-source platform to distribute and interpret data from multiplexed assays of variant effect},
-   journal = {Genome Biol},
-   volume = {20},
-   number = {1},
-   pages = {223},
-   ISSN = {1474-760X (Electronic)
-1474-7596 (Linking)},
-   DOI = {10.1186/s13059-019-1845-6},
-   url = {https://www.ncbi.nlm.nih.gov/pubmed/31679514},
-   year = {2019},
-   type = {Journal Article}
-}
+For use of `MAVE.tgz`, please cite the MAVEDB. (DOI: 10.1186/s13059-019-1845-6)
 
-For use of `ICC.tgz`, please cite the original papers.
+For use of `ICC.tgz`, please cite these papers. (DOI: 10.1016/j.ajhg.2021.10.007; 10.1126/scitranslmed.aay6848; 10.1158/2159-8290.CD-17-0321; 10.1126/scisignal.2004088; 10.1093/nar/gky1015)
 
-For use of `pathogenicity.tgz`, please cite PrimatAI.
+For use of `pathogenicity.tgz`, please cite PrimatAI. (DOI: 10.1038/s41588-018-0167-z)
 
 
 # Run
