@@ -1,5 +1,5 @@
 # PreMode
-This is the repository for our manuscript "Predicting mode of action of variants by graph representation of protein structural context" that submit to NeurIPS 2023.
+This is the repository for our manuscript "Predicting mode of action of variants by graph representation of protein structural context" that submit to NeurIPS 2023 and under review.
 
 # Data
 Please unzip `MAVE.tgz`, `ICC.tgz`, `pathogenicity.tgz` and put them under your data directory.
