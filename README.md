@@ -12,10 +12,16 @@ For use of `ICC.tgz`, please cite PrimatAI.
 `python train.py --conf CONFIG.yaml`
 All config files were stored in `scripts/` folder.
 `scripts/CHPs.v1.SAGPool.ct/` PreMode
+
 `scripts/CHPs.v1.noGraph.SAGPool.ct/` PreMode-1D
+
 `scripts/CHPs.v1.SAGPool.2KNN.ct.seed.0.yaml` PreMode-2KNN
+
 `scripts/CHPs.v1.aa5dim.SAGPool.ct/`  PreMode-AAchem
+
 `scripts/CHPs.v1.onehot.SAGPool.ct/`  PreMode-onehot
+
 `scripts/CHPs.v1.swissprot.SAGPool.ct/` PreMode-onehot (parameters initialized from pretrain on swissprot)
+
 `scripts/CHPs.v1.swissprot.noGraph.SAGPool.ct/` PreMode-onehot-1D (parameters initialized from pretrain on swissprot)
 
