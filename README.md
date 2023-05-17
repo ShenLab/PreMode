@@ -3,8 +3,11 @@ This is the repository for our manuscript that submit to NeurIPS.
 
 # Data
 Please unzip `MAVE.tgz`, `ICC.tgz`, `pathogenicity.tgz` and put them under your data directory.
+
 For use of `MAVE.tgz`, please cite the MAVEDB.
+
 For use of `ICC.tgz`, please cite the original papers.
+
 For use of `ICC.tgz`, please cite PrimatAI.
 
 
