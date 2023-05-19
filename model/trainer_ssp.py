@@ -2,16 +2,16 @@ import torch
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 from torch.nn.functional import mse_loss
-from model.trainer import gRESCVE_trainer
+from model.trainer import PreMode_trainer
 
 
-class gRESCVE_trainer_SSP(gRESCVE_trainer):
+class PreMode_trainer_SSP(PreMode_trainer):
     """
     A wrapper for dataloader, summary writer, optimizer, scheduler
     """
 
     def __init__(self, hparams, model, stage: str = "train", dataset=None, device_id=None):
-        super(gRESCVE_trainer_SSP, self).__init__(hparams, model, stage, dataset, device_id)
+        super(PreMode_trainer_SSP, self).__init__(hparams, model, stage, dataset, device_id)
         self.loss_fn_ssp = mse_loss
 
     def step(self, batch, stage="train"):

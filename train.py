@@ -11,9 +11,9 @@ import torch.multiprocessing as mp
 import data
 from model import model
 from model.model import create_model, create_model_and_load
-from model.trainer import (data_distributed_parallel_gpu, gRESCVE_trainer, single_thread_gpu)
-from model.trainer_noGraph import gRESCVE_trainer_noGraph
-from model.trainer_ssp import gRESCVE_trainer_SSP
+from model.trainer import (data_distributed_parallel_gpu, PreMode_trainer, single_thread_gpu)
+from model.trainer_noGraph import PreMode_trainer_noGraph
+from model.trainer_ssp import PreMode_trainer_SSP
 from utils.configs import save_argparse, LoadFromFile
 
 mp.set_sharing_strategy('file_system')
@@ -118,7 +118,7 @@ def get_args():
                         help='Drop out rate at each layer') 
    
     # training specific
-    parser.add_argument('--trainer-fn', type=str, default='gRESCVE_trainer', 
+    parser.add_argument('--trainer-fn', type=str, default='PreMode_trainer', 
                         help='trainer function')
     parser.add_argument('--seed', type=int, default=0, 
                         help='random seed')
@@ -216,14 +216,14 @@ def main(args):
                    "computed_graph": args.computed_graph,
                    "neighbor_type": args.neighbor_type,
                    "max_len": args.max_len,}
-    if args.trainer_fn == "gRESCVE_trainer_noGraph":
-        trainer_fn = gRESCVE_trainer_noGraph
+    if args.trainer_fn == "PreMode_trainer_noGraph":
+        trainer_fn = PreMode_trainer_noGraph
         dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "gRESCVE_trainer":
-        trainer_fn = gRESCVE_trainer
+    elif args.trainer_fn == "PreMode_trainer":
+        trainer_fn = PreMode_trainer
         dataset_extra_args = {}
-    elif args.trainer_fn == "gRESCVE_trainer_SSP":
-        trainer_fn = gRESCVE_trainer_SSP
+    elif args.trainer_fn == "PreMode_trainer_SSP":
+        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
@@ -274,14 +274,14 @@ def main_continue(args):
                    "computed_graph": args.computed_graph,
                    "neighbor_type": args.neighbor_type,
                    "max_len": args.max_len,}
-    if args.trainer_fn == "gRESCVE_trainer_noGraph":
-        trainer_fn = gRESCVE_trainer_noGraph
+    if args.trainer_fn == "PreMode_trainer_noGraph":
+        trainer_fn = PreMode_trainer_noGraph
         dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "gRESCVE_trainer":
-        trainer_fn = gRESCVE_trainer
+    elif args.trainer_fn == "PreMode_trainer":
+        trainer_fn = PreMode_trainer
         dataset_extra_args = {}
-    elif args.trainer_fn == "gRESCVE_trainer_SSP":
-        trainer_fn = gRESCVE_trainer_SSP
+    elif args.trainer_fn == "PreMode_trainer_SSP":
+        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
@@ -326,14 +326,14 @@ def _test(args):
                    "add_position": args.add_position,
                    "computed_graph": args.computed_graph,
                    "max_len": args.max_len,}
-    if args.trainer_fn == "gRESCVE_trainer_noGraph":
-        trainer_fn = gRESCVE_trainer_noGraph
+    if args.trainer_fn == "PreMode_trainer_noGraph":
+        trainer_fn = PreMode_trainer_noGraph
         dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "gRESCVE_trainer":
-        trainer_fn = gRESCVE_trainer
+    elif args.trainer_fn == "PreMode_trainer":
+        trainer_fn = PreMode_trainer
         dataset_extra_args = {}
-    elif args.trainer_fn == "gRESCVE_trainer_SSP":
-        trainer_fn = gRESCVE_trainer_SSP
+    elif args.trainer_fn == "PreMode_trainer_SSP":
+        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
@@ -423,14 +423,14 @@ def interpret(args, idxs=None, epoch=None, step=None):
                    "add_position": args.add_position,
                    "computed_graph": args.computed_graph,
                    "max_len": args.max_len,}
-    if args.trainer_fn == "gRESCVE_trainer_noGraph":
-        trainer_fn = gRESCVE_trainer_noGraph
+    if args.trainer_fn == "PreMode_trainer_noGraph":
+        trainer_fn = PreMode_trainer_noGraph
         dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "gRESCVE_trainer":
-        trainer_fn = gRESCVE_trainer
+    elif args.trainer_fn == "PreMode_trainer":
+        trainer_fn = PreMode_trainer
         dataset_extra_args = {}
-    elif args.trainer_fn == "gRESCVE_trainer_SSP":
-        trainer_fn = gRESCVE_trainer_SSP
+    elif args.trainer_fn == "PreMode_trainer_SSP":
+        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")

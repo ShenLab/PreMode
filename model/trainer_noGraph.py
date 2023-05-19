@@ -3,18 +3,18 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 from os.path import join
 from torch.utils.data import DataLoader, Subset
-from model.trainer import gRESCVE_trainer
+from model.trainer import PreMode_trainer
 
 import data
 import utils.configs
 
-class gRESCVE_trainer_noGraph(gRESCVE_trainer):
+class PreMode_trainer_noGraph(PreMode_trainer):
     """
     A wrapper for dataloader, summary writer, optimizer, scheduler
     """
 
     def __init__(self, hparams, model, stage: str = "train", dataset=None, device_id=None):
-        super(gRESCVE_trainer_noGraph, self).__init__(hparams, model, stage, dataset, device_id)
+        super(PreMode_trainer_noGraph, self).__init__(hparams, model, stage, dataset, device_id)
 
     def setup_dataloaders(self, stage: str = 'train', split_fn="_by_uniprot_id"):
         if self.dataset is None:

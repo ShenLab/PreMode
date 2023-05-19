@@ -924,6 +924,261 @@ class EquivariantMultiHeadAttention(MessagePassing):
         pass
 
 
+class EquivariantTriAngularMultiHeadAttention(MessagePassing):
+    """Equivariant multi-head attention layer. Add Triangular update between edges."""
+
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            edge_attr_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+    ):
+        super(EquivariantTriAngularMultiHeadAttention, self).__init__(
+            aggr="mean", node_dim=0)
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.attn_activation = act_class_mapping[attn_activation]()
+        self.cutoff = CosineCutoff(cutoff_lower, cutoff_upper)
+
+        self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+        self.k_proj = nn.Linear(x_channels, x_hidden_channels)
+        self.v_proj = nn.Linear(
+            x_channels, x_hidden_channels + vec_channels * 2)
+        self.o_proj = nn.Linear(
+            x_hidden_channels, x_channels * 2 + vec_channels)
+
+        self.vec_proj = nn.Linear(
+            vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False)
+
+        self.dk_proj = None
+        if distance_influence in ["keys", "both"]:
+            self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+
+        self.dv_proj = None
+        if distance_influence in ["values", "both"]:
+            self.dv_proj = nn.Linear(
+                edge_attr_channels, x_hidden_channels + vec_channels * 2)
+
+        self.edge_triangle_start_update = nn.Linear(
+            x_channels, x_channels, bias=False)
+        self.edge_triangle_end_update = nn.Linear(
+            x_channels, x_channels, bias=False)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.o_proj.weight)
+        self.o_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.vec_proj.weight)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+
+    def get_start_index(edge_index):
+        edge_start_index = [[], []]
+        for i in range(edge_index.shape[0]):
+            same_start_edges = torch.where(edge_index[0] == edge_index[0, i])
+            edge_start_index[0] += same_start_edges
+            edge_start_index[1] += [i] * len(same_start_edges)
+        return torch.tensor(edge_start_index, device=edge_index.device)
+    
+    def get_end_index(edge_index):
+        edge_end_index = [[], []]
+        for i in range(edge_index.shape[0]):
+            same_end_edges = torch.where(edge_index[1] == edge_index[1, i])
+            edge_end_index[0] += same_end_edges
+            edge_end_index[1] += [i] * len(same_end_edges)
+        return torch.tensor(edge_end_index, device=edge_index.device)
+
+    def forward(self, x, vec, edge_index, edge_weight, edge_attr, edge_vec, return_attn=False):
+        x = self.layernorm(x)
+        q = self.q_proj(x).reshape(-1, self.num_heads, self.x_head_dim)
+        k = self.k_proj(x).reshape(-1, self.num_heads, self.x_head_dim)
+        v = self.v_proj(x).reshape(-1, self.num_heads,
+                                   self.x_head_dim + self.vec_head_dim * 2)
+
+        vec1, vec2, vec3 = torch.split(self.vec_proj(vec),
+                                       [self.vec_hidden_channels, self.vec_hidden_channels, self.vec_channels], dim=-1)
+        vec = vec.reshape(-1, 3, self.num_heads, self.vec_head_dim)
+        vec_dot = (vec1 * vec2).sum(dim=1)
+
+        dk = (
+            self.act(self.dk_proj(edge_attr)).reshape(-1,
+                                                 self.num_heads, self.x_head_dim)
+            if self.dk_proj is not None
+            else None
+        )
+        dv = (
+            self.act(self.dv_proj(edge_attr)).reshape(-1, self.num_heads,
+                                                 self.x_head_dim + self.vec_head_dim * 2)
+            if self.dv_proj is not None
+            else None
+        )
+        # Triangular edge update
+        edge_start_index = self.get_start_index(edge_index)
+        edge_end_index = self.get_end_index(edge_index)
+
+        edge_attr, edge_vec = self.edge_triangle_start_update(edge_attr, edge_vec, edge_start_index)
+        edge_attr, edge_vec = self.edge_triangle_end_update(edge_attr, edge_vec, edge_end_index)
+
+        # propagate_type: (q: Tensor, k: Tensor, v: Tensor, vec: Tensor, dk: Tensor, dv: Tensor, r_ij: Tensor,
+        # d_ij: Tensor)
+        x, vec, attn = self.propagate(
+            edge_index,
+            q=q,
+            k=k,
+            v=v,
+            vec=vec,
+            dk=dk,
+            dv=dv,
+            d_ij=edge_vec,
+            size=None,
+        )
+        x = x.reshape(-1, self.x_hidden_channels)
+        vec = vec.reshape(-1, 3, self.vec_channels)
+
+        o1, o2, o3 = torch.split(self.o_proj(
+            x), [self.vec_channels, self.x_channels, self.x_channels], dim=1)
+        dx = vec_dot * o2 + o3
+        dvec = vec3 * o1.unsqueeze(1) + vec
+        if return_attn:
+            return dx, dvec, torch.concat((edge_index.T, attn), dim=1)
+        else:
+            return dx, dvec, None
+
+    def message(self, q_i, k_j, v_j, vec_j, dk, dv, d_ij):
+        # attention mechanism
+        if dk is None:
+            attn = (q_i * k_j).sum(dim=-1)
+        else:  # TODO: consider add or multiply dk
+            attn = (q_i * k_j * dk).sum(dim=-1)
+
+        # attention activation function
+        attn = self.attn_activation(attn)
+
+        # value pathway
+        if dv is not None:
+            v_j = v_j * dv
+        x, vec1, vec2 = torch.split(
+            v_j, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=2)
+
+        # update scalar features
+        x = x * attn.unsqueeze(2)
+        # update vector features
+        vec = vec_j * vec1.unsqueeze(1) + vec2.unsqueeze(1) * \
+            d_ij.unsqueeze(2).unsqueeze(3)
+        return x, vec, attn
+
+    def aggregate(
+            self,
+            features: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            index: torch.Tensor,
+            ptr: Optional[torch.Tensor],
+            dim_size: Optional[int],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x, vec, attn = features
+        x = scatter(x, index, dim=self.node_dim, dim_size=dim_size)
+        vec = scatter(vec, index, dim=self.node_dim, dim_size=dim_size)
+        return x, vec, attn
+
+    def update(
+            self, inputs: Tuple[torch.Tensor, torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return inputs
+
+    def message_and_aggregate(self, adj_t: SparseTensor) -> Tensor:
+        pass
+
+    def edge_update(self) -> Tensor:
+        pass
+
+
+class MultiplicativeUpdate(MessagePassing):
+    def __init__(self, in_channel, hidden_channel, out_channel) -> None:
+        super(MultiplicativeUpdate, self).__init__(aggr="add")
+        self.in_channel = in_channel
+        self.hidden_channel = hidden_channel
+        self.out_channel = out_channel
+
+        self.linear_a_p = nn.Linear(self.in_channel, self.hidden_channel)
+        self.linear_a_g = nn.Linear(self.in_channel, self.hidden_channel, init="gating")
+        self.linear_b_p = nn.Linear(self.in_channel, self.hidden_channel)
+        self.linear_b_g = nn.Linear(self.in_channel, self.hidden_channel, init="gating")
+        self.linear_g = nn.Linear(self.in_channel, self.in_channel, init="gating")
+        self.linear_z = nn.Linear(self.hidden_channel, self.in_channel, init="final")
+
+        self.layer_norm_in = nn.LayerNorm(self.in_channel)
+        self.layer_norm_out = nn.LayerNorm(self.hidden_channel)
+
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, 
+        edge_vec: torch.Tensor, 
+        edge_attr: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            x:
+                [*, N_res, N_res, C_z] input tensor
+            mask:
+                [*, N_res, N_res] input mask
+        Returns:
+            [*, N_res, N_res, C_z] output tensor
+        """
+        edge_attr = self.layer_norm_in(edge_attr)
+        a = self.linear_a_p(edge_vec) * self.sigmoid(self.linear_a_g(edge_vec))
+        b = self.linear_b_p(edge_vec) * self.sigmoid(self.linear_b_g(edge_vec))
+        x = self.propagate(a, b)
+        x = self.layer_norm_out(x)
+        x = self.linear_z(x)
+        g = self.sigmoid(self.linear_g(edge_vec))
+        edge_vec = x * g
+        return edge_vec
+    
+    def message(self, x_i, x_j: Tensor) -> Tensor:
+        return x_i * x_j
+
 # softmax version of torchmd-net attention layer
 class EquivariantMultiHeadAttentionSoftMax(EquivariantMultiHeadAttention):
     """Equivariant multi-head attention layer with softmax"""

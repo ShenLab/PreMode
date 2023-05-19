@@ -389,6 +389,86 @@ def make_splits_train_val_by_good_batch(
     )
 
 
+def train_val_split_by_uniprot_id_good_batch(dset, train_size, val_size, seed, batch_size=48, order=None):
+    assert (train_size is None) + (
+            val_size is None) <= 1, "Only one of train_size, val_size, test_size is allowed to be None."
+    is_float = (
+        isinstance(train_size, float),
+        isinstance(val_size, float),
+    )
+    dset_len: int = len(dset)
+
+    train_size = round(dset_len * train_size) if is_float[0] else train_size
+    val_size = round(dset_len * val_size) if is_float[1] else val_size
+
+    if train_size is None:
+        train_size = dset_len - val_size
+    elif val_size is None:
+        val_size = dset_len - train_size
+
+    if train_size + val_size > dset_len:
+        if is_float[1]:
+            val_size -= 1
+        elif is_float[0]:
+            train_size -= 1
+
+    assert train_size >= 0 and val_size >= 0, (
+        f"One of training ({train_size}), validation ({val_size})"
+        f" splits ended up with a negative size."
+    )
+
+    total = train_size + val_size
+    assert dset_len >= total, (
+        f"The dataset ({dset_len}) is smaller than the "
+        f"combined split sizes ({total})."
+    )
+    if total < dset_len:
+        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+
+    uniprot_freq_table = dset.data.uniprotID.value_counts()
+    selected_val_uniprotIDs, _ = select_by_uniprot(uniprot_freq_table, val_size)
+
+    idxs = np.arange(dset_len, dtype=np.int)
+    idx_train = idxs[np.isin(dset.data.uniprotID, selected_val_uniprotIDs, invert=True)]
+    idx_val = idxs[np.isin(dset.data.uniprotID, selected_val_uniprotIDs)]
+
+    if order is None:
+        idx_train = np.random.default_rng(seed).permutation(idx_train)
+        idx_val = np.random.default_rng(seed).permutation(idx_val)
+        idx_train = guarantee_good_batch(idx_train, batch_size, dset)
+    else:
+        idx_train = [order[i] for i in idx_train]
+        idx_val = [order[i] for i in idx_val]
+
+    return np.array(idx_train), np.array(idx_val)
+
+
+def make_splits_train_val_by_uniprot_id_good_batch(
+        dset,
+        train_size,
+        val_size,
+        seed,
+        batch_size=48,
+        filename=None,
+        splits=None,
+        order=None,
+):
+    if splits is not None:
+        splits = np.load(splits)
+        idx_train = splits["idx_train"]
+        idx_val = splits["idx_val"]
+    else:
+        idx_train, idx_val = train_val_split_by_uniprot_id_good_batch(dset, train_size, val_size, seed, batch_size, order)
+
+    if filename is not None:
+        np.savez(filename, idx_train=idx_train, idx_val=idx_val)
+
+    return (
+        torch.from_numpy(idx_train),
+        torch.from_numpy(idx_val),
+    )
+
+
 def train_val_test_split_by_uniprot_id(dset, train_size, val_size, test_size, seed, batch_size=48, order=None):
     assert (train_size is None) + (val_size is None) + (
             test_size is None
@@ -507,6 +587,10 @@ def reshuffle_train_by_good_batch(idx_train, batch_size, dset, seed=None):
             idx_train, batch_size, dset, seed=seed
         )
     return idx_train
+
+
+def reshuffle_train_by_uniprot_id_good_batch(idx_train, batch_size, dset, seed=None):
+    return reshuffle_train_by_good_batch(idx_train, batch_size, dset, seed)
 
 
 def reshuffle_train_by_anno(idx_train, batch_size, dset, seed=None):
