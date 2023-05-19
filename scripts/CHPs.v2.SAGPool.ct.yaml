@@ -17,7 +17,7 @@ radius: 50 # radius for KNN graph, larger than curoff_upper
 
 ## model specific
 load_model: null
-model_class: gRESCVE
+model_class: PreMode
 model: equivariant-transformer-star2-softmax
 neighbor_embedding: true
 cutoff_lower: 0.0 # graph related

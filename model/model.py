@@ -7,10 +7,10 @@ from torch import nn, Tensor
 
 from model.module import output
 
-__all__ = ["gRESCVE", "gRESCVE_DIFF", "gRESCVE_SSP", "gRESCVE_Mask_Predict", "gRESCVE_Single"]
+__all__ = ["PreMode", "PreMode_DIFF", "PreMode_SSP", "PreMode_Mask_Predict", "PreMode_Single"]
 
 
-def create_model(args, model_class="gRESCVE"):
+def create_model(args, model_class="PreMode"):
     shared_args = dict(
         num_heads=args["num_heads"],
         x_in_channels=args["x_in_channels"],
@@ -82,7 +82,7 @@ def create_model(args, model_class="gRESCVE"):
     return model
 
 
-def create_model_and_load(args, model_class="gRESCVE"):
+def create_model_and_load(args, model_class="PreMode"):
     model = create_model(args, model_class)
     state_dict = torch.load(args["load_model"], map_location="cpu")
     # The following are for backward compatibility with models created when atomref was
@@ -119,7 +119,7 @@ def create_model_and_load(args, model_class="gRESCVE"):
     return model
 
 
-def load_model(filepath, args=None, device="cpu", model_class="gRESCVE", **kwargs):
+def load_model(filepath, args=None, device="cpu", model_class="PreMode", **kwargs):
     ckpt = torch.load(filepath, map_location="cpu")
     if args is None:
         args = ckpt["hyper_parameters"]
@@ -137,13 +137,13 @@ def load_model(filepath, args=None, device="cpu", model_class="gRESCVE", **kwarg
     return model.to(device)
 
 
-class gRESCVE(nn.Module):
+class PreMode(nn.Module):
     def __init__(
             self,
             representation_model,
             output_model,
     ):
-        super(gRESCVE, self).__init__()
+        super(PreMode, self).__init__()
         self.representation_model = representation_model
         self.output_model = output_model
 
@@ -226,14 +226,14 @@ class gRESCVE(nn.Module):
         return y, x, attn_weight_layers
 
 
-class gRESCVE_SSP(gRESCVE):
+class PreMode_SSP(PreMode):
     def __init__(
             self,
             representation_model,
             output_model,
             vec_in_channels=4,
     ):
-        super(gRESCVE_SSP, self).__init__(representation_model=representation_model,
+        super(PreMode_SSP, self).__init__(representation_model=representation_model,
                                           output_model=output_model,)
         self.vec_reconstruct = nn.Linear(representation_model.vec_channels, vec_in_channels, bias=False)
 
@@ -288,13 +288,13 @@ class gRESCVE_SSP(gRESCVE):
         return x_graph, vec, y, x, attn_weight_layers
 
 
-class gRESCVE_DIFF(gRESCVE):
+class PreMode_DIFF(PreMode):
     def __init__(
             self,
             representation_model,
             output_model,
     ):
-        super(gRESCVE_DIFF, self).__init__(representation_model=representation_model,
+        super(PreMode_DIFF, self).__init__(representation_model=representation_model,
                                            output_model=output_model,)
 
     def forward(
@@ -356,13 +356,13 @@ class gRESCVE_DIFF(gRESCVE):
         return y, x, [attn_weight_layers_ref, attn_weight_layers_alt]
 
 
-class gRESCVE_CON(gRESCVE):
+class PreMode_CON(PreMode):
     def __init__(
             self,
             representation_model,
             output_model,
     ):
-        super(gRESCVE_CON, self).__init__(representation_model=representation_model,
+        super(PreMode_CON, self).__init__(representation_model=representation_model,
                                            output_model=output_model,)
 
     def forward(
@@ -438,13 +438,13 @@ class gRESCVE_CON(gRESCVE):
         return y, x, attn_weight_layers
 
 
-class gRESCVE_Mask_Predict(gRESCVE):
+class PreMode_Mask_Predict(PreMode):
     def __init__(
             self,
             representation_model,
             output_model,
     ):
-        super(gRESCVE_Mask_Predict, self).__init__(representation_model=representation_model,
+        super(PreMode_Mask_Predict, self).__init__(representation_model=representation_model,
                                                    output_model=output_model,)
 
     def forward(
@@ -494,13 +494,13 @@ class gRESCVE_Mask_Predict(gRESCVE):
         return y, y, attn_weight_layers_ref
 
 
-class gRESCVE_Single(gRESCVE):
+class PreMode_Single(PreMode):
     def __init__(
             self,
             representation_model,
             output_model,
     ):
-        super(gRESCVE_Single, self).__init__(representation_model=representation_model,
+        super(PreMode_Single, self).__init__(representation_model=representation_model,
                                              output_model=output_model,)
 
     def forward(

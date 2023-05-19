@@ -16,7 +16,7 @@ radius: 50 # radius for KNN graph, larger than curoff_upper
 
 ## model specific
 load_model: /share/vault/Users/gz2294/PreMode.final/CHPs.v1.esm1b.SAGPool.ct.seed.0/model.step..pt
-model_class: gRESCVE
+model_class: PreMode
 model: equivariant-transformer-star2-softmax
 neighbor_embedding: true
 cutoff_lower: 0.0 # graph related
@@ -47,7 +47,7 @@ attn_activation: silu
 drop_out: 0.1
 
 ## training specific
-trainer_fn: gRESCVE_trainer
+trainer_fn: PreMode_trainer
 seed: 2
 lr: 5e-6 # important
 lr_factor: 0.8 # important
