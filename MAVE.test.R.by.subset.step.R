@@ -3,52 +3,58 @@ args <- commandArgs(trailingOnly = T)
 # base dir for transfer learning
 base.dir <- args[1]
 result <- data.frame()
-tasks <- c("PTEN", "NUDT15", "CCR5", "CXCR4", "VKORC1")
+# tasks <- c("PTEN", "NUDT15", "CCR5", "CXCR4", "VKORC1")
+tasks <- c("PTEN.bin", "PTEN", "NUDT15", "CCR5", "CXCR4")
 for (task in tasks) {
   for (subset in c(1,2,4,6,8)) {
     for (seed in 0:2) {
       if (subset == 8) {
-        configs <- yaml::read_yaml(paste0(base.dir, task, '/', 
-                                          task, '.seed.', seed, '.yaml'))
+        configs <- yaml::read_yaml(paste0(base.dir, task, '.5fold/', 
+                                          task, '.fold.', seed, '.yaml'))
       } else {
         configs <- yaml::read_yaml(paste0(base.dir, task, '.subsets/subset.', 
                                           subset, '/seed.', seed, '.yaml'))
       }
-      res <- get.R.by.step(configs)
+      bin = task == "PTEN.bin"
+      res <- get.R.by.epoch(configs, bin=bin)
       R2s <- as.data.frame(res[,startsWith(colnames(res), "R2s")])
-      df <- data.frame(task = task,
-                       subset = subset*10,
-                       seed = seed,
-                       min.val.R = R2s[which(res$val==min(res$val))[1],],
-                       end.R = R2s[dim(res)[1],],
-                       max.R = R2s[which(rowMeans(R2s)==max(rowMeans(R2s)))[1],]
-      )
-      result <- dplyr::bind_rows(result, df)
-    }
-  }
-}
-for (task in "IonChannel") {
-  for (subset in c(1,2,4,6,8)) {
-    for (seed in 0:2) {
-      if (subset == 8) {
-        configs <- yaml::read_yaml(paste0(base.dir, task, '/', 
-                                          task, '.seed.', seed, '.yaml'))
+      if (dim(res)[1] == 0) {
+        df <- NA
       } else {
-        configs <- yaml::read_yaml(paste0(base.dir, task, '.subsets/subset.', 
-                                          subset, '/seed.', seed, '.yaml'))
+        df <- data.frame(task = task,
+                         subset = subset*10,
+                         seed = seed,
+                         min.val.R = R2s[which(res$val==min(res$val))[1],],
+                         end.R = R2s[dim(res)[1],],
+                         max.R = R2s[which(rowMeans(R2s)==max(rowMeans(R2s)))[1],]
+        )
       }
-      res <- get.auc.by.step(configs)
-      df <- data.frame(task = task,
-                       subset = subset*10,
-                       seed = seed,
-                       min.val.R.R2s.1 = res$aucs[which(res$val==min(res$val))[1]],
-                       end.R = res$aucs[dim(res)[1]],
-                       max.R = res$aucs[which(res$aucs==max(res$aucs))[1]]
-      )
       result <- dplyr::bind_rows(result, df)
     }
   }
 }
+# for (task in "IonChannel") {
+#   for (subset in c(1,2,4,6,8)) {
+#     for (seed in 0:2) {
+#       if (subset == 8) {
+#         configs <- yaml::read_yaml(paste0(base.dir, task, '/', 
+#                                           task, '.seed.', seed, '.yaml'))
+#       } else {
+#         configs <- yaml::read_yaml(paste0(base.dir, task, '.subsets/subset.', 
+#                                           subset, '/seed.', seed, '.yaml'))
+#       }
+#       res <- get.auc.by.epoch(configs)
+#       df <- data.frame(task = task,
+#                        subset = subset*10,
+#                        seed = seed,
+#                        min.val.R.R2s.1 = res$aucs[which(res$val==min(res$val))[1]],
+#                        end.R = res$aucs[dim(res)[1]],
+#                        max.R = res$aucs[which(res$aucs==max(res$aucs))[1]]
+#       )
+#       result <- dplyr::bind_rows(result, df)
+#     }
+#   }
+# }
 # p <- ggplot(result, aes(y=end.R, x=task)) + geom_point() + geom_boxplot() + theme_bw() + ylim(0.5, 1)
 # ggsave(paste0(base.dir, 'MAVE.pdf'), p, height = 6, width = 8)
 write.csv(result, paste0(base.dir, 'MAVE.subsets.csv'))
@@ -56,23 +62,27 @@ assay.ref <- list(c("stability", "enzyme activity"),
                   c("stability", "enzyme activity"),
                   c("stability", "bind AB-2D7", "bind HIV-1"),
                   c("stability", "bind CXCL12", "bind AB-12G5"),
-                  c("enzyme activity", "stability"),
-                  c("GoF / LoF"))
+                  c("enzyme activity", "stability"))
+                  # c("GoF / LoF"))
 baseline.ref <- list(c(0.464, 0.491),
                      c(0.389, 0.518),
                      c(0.424, 0.458, 0.411),
                      c(0.281, 0.171, 0.127),
-                     c(0.328, 0.564),
-                     c(0.570))
+                     c(NA, NA))
+                     # c(0.328, 0.564),
+                     # c(0.570))
 # baseline.ref <- list(c(0.462, 0.491),
 #                      c(0.421, 0.589),
 #                      c(0.443, 0.424, 0.404),
 #                      c(0.329, 0.193, 0.218),
 #                      c(0.353, 0.561),
 #                      c(0.570))
-tasks <- c("PTEN", "NUDT15", "CCR5", "CXCR4", "VKORC1", "IonChannel")
-data.dir <- c("~/Data/DMS/MAVEDB/", "~/Data/DMS/MAVEDB/", "~/Data/DMS/MAVEDB/", 
-              "~/Data/DMS/MAVEDB/", "~/Data/DMS/MAVEDB/", "~/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/")
+tasks <- c("PTEN", "NUDT15", "CCR5", "CXCR4", "PTEN.bin")
+# tasks <- c("PTEN", "NUDT15", "CCR5", "CXCR4", "VKORC1", "IonChannel")
+data.dir <- c("~/Data/DMS/MAVEDB/", "~/Data/DMS/MAVEDB/", 
+              "~/Data/DMS/MAVEDB/", 
+              "~/Data/DMS/MAVEDB/", "~/Data/DMS/MAVEDB/", 
+              "~/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/")
 plots <- list()
 for (i in 1:length(tasks)) {
   task <- tasks[i]
@@ -109,6 +119,6 @@ for (i in 1:length(tasks)) {
   plots[[i]] <- p
 }
 library(patchwork)
-p <- (plots[[1]] + plots[[2]]) / (plots[[3]] + plots[[4]]) / (plots[[5]] + plots[[6]])
-ggsave(p, filename = paste0(base.dir, "MAVE.subsets.pdf"), width = 10, height = 12)
+p <- (plots[[1]] + plots[[2]]) / (plots[[3]] + plots[[4]]) 
+ggsave(p, filename = paste0("MAVE.subsets.pdf"), width = 10, height = 12)
 

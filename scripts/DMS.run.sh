@@ -3,7 +3,7 @@
 # $2 are the tasks to run, seperated by comma
 # $3 is the gpu ids that used for training, seperated by comma
 # $4 is an optional argument that, if present, skips the check for finished tasks
-cd /share/terra/Users/gz2294/RESCVE.final
+cd /share/terra/Users/gz2294/PreMode.final
 IFS=',' read -ra arr <<< $2
 CUDA_VISIBLE_DEVICES=$3
 echo "CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES
@@ -13,7 +13,7 @@ do
   if [[ $gene == "Itan.CKB.Cancer" || $gene == "ICC" ]]; then
     for task in $(cat scripts/pfams.txt); do
       echo "Begin "$task
-      for seed in {0..2}
+      for seed in {0..4}
       do
         # check if task has finished, unless the skip argument is present
         if [ -z "$4" ]; then
@@ -29,7 +29,7 @@ do
     done
   else
     echo "Begin "$gene
-    for seed in {0..2}
+    for seed in {0..4}
     do
       # check if task has finished, unless the skip argument is present
       if [ -z "$4" ]; then

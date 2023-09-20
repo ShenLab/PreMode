@@ -1,3 +1,9 @@
-analysis/rosetta.out/
-analysis/
+analysis/5genes.all.mut/
+analysis/cohort/
+analysis/esm2.inference/
+analysis/figs/
+analysis/PreMode.inference/
+analysis/PreMode.pass.inference/
 archive/
+tmp.*
+README.new.md

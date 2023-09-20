@@ -3,7 +3,7 @@
 # $2 are the files that needs inference, seperated by comma
 # $3 is the gpu id to use
 # $4 is an optional argument that, if present, serves as the output files
-cd /share/terra/Users/gz2294/RESCVE.final
+cd /share/terra/Users/gz2294/PreMode.final
 IFS=',' read -ra arr <<< $2
 if [ -z "$4" ]; then
   IFS=',' read -ra out <<< $4

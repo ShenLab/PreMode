@@ -1,0 +1,10 @@
+IonChannel.chps.even.uniprotID
+IonChannel.split.uniprotID
+IonChannel
+PF07714
+PF00130
+PF02196
+PF07679
+PF00047
+PF00028
+PF17756

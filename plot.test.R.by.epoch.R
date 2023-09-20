@@ -1,4 +1,4 @@
-setwd('/share/terra/Users/gz2294/RESCVE.final/')
+setwd('/share/terra/Users/gz2294/PreMode.final/')
 source('utils.R')
 args <- commandArgs(trailingOnly = T)
 configs <- yaml::read_yaml(args[1])

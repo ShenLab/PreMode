@@ -30,6 +30,7 @@ def create_model(args, model_class="PreMode"):
         cutoff_lower=args["cutoff_lower"],
         cutoff_upper=args["cutoff_upper"],
         x_in_embedding_type=args["x_in_embedding_type"],
+        x_use_msa=args['add_msa'],
         drop_out_rate=args["drop_out"],
     )
 
@@ -51,10 +52,37 @@ def create_model(args, model_class="PreMode"):
     elif args["model"] == "equivariant-transformer-star2-softmax":
         from model.module.representation import eqStar2TransformerSoftMax
         model_fn = eqStar2TransformerSoftMax
+        shared_args["use_lora"]=args["use_lora"]
+        shared_args["share_kv"]=args["share_kv"]
     elif args["model"] == "equivariant-triangular-attention-transformer":
         from model.module.representation import eqTriAttnTransformer
         model_fn = eqTriAttnTransformer
         shared_args["pariwise_state_dim"]=args["vec_hidden_channels"]
+    elif args["model"] == "equivariant-triangular-star-transformer":
+        from model.module.representation import eqTriStarTransformer
+        model_fn = eqTriStarTransformer
+    elif args["model"] == "equivariant-msa-triangular-star-transformer":
+        from model.module.representation import eqMSATriStarTransformer
+        model_fn = eqMSATriStarTransformer
+        shared_args["ee_channels"]=args["ee_channels"]
+        shared_args["triangular_update"]=args["triangular_update"]
+    elif args["model"] == "equivariant-msa-triangular-star-drop-transformer":
+        from model.module.representation import eqMSATriStarDropTransformer
+        model_fn = eqMSATriStarDropTransformer
+        shared_args["ee_channels"]=args["ee_channels"]
+        shared_args["triangular_update"]=args["triangular_update"]
+        shared_args["use_lora"]=args["use_lora"]
+    elif args["model"] == "equivariant-msa-triangular-star-gru-transformer":
+        from model.module.representation import eqMSATriStarGRUTransformer
+        model_fn = eqMSATriStarGRUTransformer
+        shared_args["ee_channels"]=args["ee_channels"]
+        shared_args["triangular_update"]=args["triangular_update"]
+    elif args["model"] == "equivariant-msa-triangular-star-drop-gru-transformer":
+        from model.module.representation import eqMSATriStarDropGRUTransformer
+        model_fn = eqMSATriStarDropGRUTransformer
+        shared_args["ee_channels"]=args["ee_channels"]
+        shared_args["triangular_update"]=args["triangular_update"]
+        shared_args["use_lora"]=args["use_lora"]
     elif args["model"] == "pass-forward":
         from model.module.representation import PassForward
         model_fn = PassForward
@@ -78,6 +106,7 @@ def create_model(args, model_class="PreMode"):
     model = globals()[model_class](
         representation_model,
         output_model,
+        alt_projector=args["alt_projector"],
     )
     return model
 
@@ -108,12 +137,37 @@ def create_model_and_load(args, model_class="PreMode"):
                     representation_model_state_dict[key.replace("representation_model.", "")] = state_dict[key]
             else:
                 representation_model_state_dict[key.replace("representation_model.", "")] = state_dict[key]
-    model.representation_model.load_state_dict(representation_model_state_dict)
-    if args["data_type"] == "ClinVar":
+    model.representation_model.load_state_dict(representation_model_state_dict, strict=False)
+    if args["data_type"] == "ClinVar" \
+        or args['loss_fn'] == "combined_loss" \
+        or args['loss_fn'] == "weighted_combined_loss":
+        # or args['loss_fn'] == "weighted_loss":
         try:
-            model.output_model.load_state_dict(output_model_state_dict)
+            # check the output network module dimension
+            if output_model_state_dict['output_network.0.weight'].shape[0] != args['output_dim']:
+                print('Warning: output network module dimension is not equal to output_dim, now changing the dimension')
+                output_network_weight = torch.concat(
+                    (output_model_state_dict['output_network.0.weight'],
+                     torch.zeros(args['output_dim'] - output_model_state_dict['output_network.0.weight'].shape[0], 
+                                 output_model_state_dict['output_network.0.weight'].shape[1])
+                     )
+                )
+                output_network_bias = torch.concat(
+                    (output_model_state_dict['output_network.0.bias'],
+                     torch.zeros(args['output_dim'] - output_model_state_dict['output_network.0.bias'].shape[0])
+                     )
+                )
+                output_model_state_dict['output_network.0.weight'] = output_network_weight
+                output_model_state_dict['output_network.0.bias'] = output_network_bias
+                model.output_model.load_state_dict(output_model_state_dict, strict=False)
+            print(f"loaded the output model state dict including the output module")
         except RuntimeError:
             print(f"Warning: Didn't load output model state dict because keys didn't match.")
+    # elif "StarPool" in args['output_model']:
+    #     del output_model_state_dict['output_network.0.weight']
+    #     del output_model_state_dict['output_network.0.bias']
+    #     print("Partially loaded the output model state dict, kept the attention layer")
+    #     model.output_model.load_state_dict(output_model_state_dict, strict=False)
     else:
         print(f"Warning: Didn't load output model because task is not ClinVar")
     return model
@@ -142,8 +196,425 @@ class PreMode(nn.Module):
             self,
             representation_model,
             output_model,
+            alt_projector=None,
     ):
         super(PreMode, self).__init__()
+        self.representation_model = representation_model
+        self.output_model = output_model
+        if alt_projector is not None:
+            # need to have a linear layer to project the concatenated vector to the same dimension as the original vector
+            out_dim = representation_model.x_channels if representation_model.x_in_channels is None else representation_model.x_in_channels
+            self.alt_linear = nn.Linear(alt_projector, out_dim, bias=False)
+        else:
+            self.alt_linear = None
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.representation_model.reset_parameters()
+        self.output_model.reset_parameters()
+
+    def forward(
+            self,
+            x: Tensor,
+            x_mask: Tensor,
+            x_alt: Tensor,
+            pos: Tensor,
+            edge_index: Tensor,
+            edge_index_star: Tensor = None,
+            edge_attr: Tensor = None,
+            edge_attr_star: Tensor = None,
+            node_vec_attr: Tensor = None,
+            batch: Optional[Tensor] = None,
+            extra_args: Optional[Dict[str, Tensor]] = None,
+            return_attn: bool = False,
+    ) -> Tuple[Tensor, Tensor, List]:
+        
+        # assert x.dim() == 2
+        batch = torch.zeros(x.shape[0], dtype=torch.int64, device=x.device) if batch is None else batch
+
+        # get the graph representation of origin protein first
+        # if there is msa in x, split it
+        if (self.representation_model.x_in_channels is not None and x.shape[1] > self.representation_model.x_in_channels):
+            x_orig, _ = x[:, :self.representation_model.x_in_channels], x[:, self.representation_model.x_in_channels:]
+        elif x.shape[1] > self.representation_model.x_channels:
+            x_orig, _ = x[:, :self.representation_model.x_channels], x[:, self.representation_model.x_channels:]
+        else:
+            x_orig = x
+
+        if self.alt_linear is not None:
+            x_alt = self.alt_linear(x_alt)
+        # update x to alt aa
+        x = x * x_mask + x_alt * x_mask
+
+        # run the potentially wrapped representation model
+        if extra_args is not None and "y_mask" in extra_args:
+            x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+                x=x,
+                pos=pos,
+                batch=batch,
+                edge_index=edge_index,
+                edge_index_star=edge_index_star,
+                edge_attr=edge_attr,
+                edge_attr_star=edge_attr_star,
+                node_vec_attr=node_vec_attr,
+                mask=extra_args["y_mask"].to(x.device),
+                return_attn=return_attn, )
+        else:
+            x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+                x=x,
+                pos=pos,
+                batch=batch,
+                edge_index=edge_index,
+                edge_index_star=edge_index_star,
+                edge_attr=edge_attr,
+                edge_attr_star=edge_attr_star,
+                node_vec_attr=node_vec_attr,
+                return_attn=return_attn, )
+
+        # apply the output network
+        x = self.output_model.pre_reduce(x, v, pos, batch)
+
+        # aggregate residues
+        if extra_args is not None and "y_mask" in extra_args:
+            x = x * extra_args["y_mask"].unsqueeze(2).to(x.device)
+        
+        # reduce nodes
+        x, attn_out = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
+        # x = self.output_model.reduce(x, edge_index, edge_attr, batch)
+        attn_weight_layers.append(attn_out)
+        # apply output model after reduction
+        y = self.output_model.post_reduce(x)
+
+        return y, x, attn_weight_layers
+
+
+class PreMode_Star(nn.Module):
+    def __init__(
+            self,
+            representation_model,
+            output_model,
+            alt_projector=None,
+    ):
+        super(PreMode_Star, self).__init__()
+        self.representation_model = representation_model
+        self.output_model = output_model
+        if alt_projector is not None:
+            # need to have a linear layer to project the concatenated vector to the same dimension as the original vector
+            out_dim = representation_model.x_channels if representation_model.x_in_channels is None else representation_model.x_in_channels
+            self.alt_linear = nn.Linear(alt_projector, out_dim, bias=False)
+        else:
+            self.alt_linear = None
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.representation_model.reset_parameters()
+        self.output_model.reset_parameters()
+
+    def forward(
+            self,
+            x: Tensor,
+            x_mask: Tensor,
+            x_alt: Tensor,
+            pos: Tensor,
+            edge_index: Tensor,
+            edge_index_star: Tensor = None,
+            edge_attr: Tensor = None,
+            edge_attr_star: Tensor = None,
+            node_vec_attr: Tensor = None,
+            batch: Optional[Tensor] = None,
+            extra_args: Optional[Dict[str, Tensor]] = None,
+            return_attn: bool = False,
+    ) -> Tuple[Tensor, Tensor, List]:
+        
+        # assert x.dim() == 2
+        batch = torch.zeros(x.shape[0], dtype=torch.int64, device=x.device) if batch is None else batch
+
+        # get the graph representation of origin protein first
+        # if there is msa in x, split it
+        if x.shape[1] > self.representation_model.x_channels:
+            x_orig, _ = x[:, :self.representation_model.x_channels], x[:, self.representation_model.x_channels:]
+        else:
+            x_orig = x
+        if self.alt_linear is not None:
+            x_alt = self.alt_linear(x_alt)
+        # update x to alt aa
+        x = x * x_mask + x_alt * x_mask
+
+        # run the potentially wrapped representation model
+        if extra_args is not None and "y_mask" in extra_args:
+            x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+                x=x,
+                pos=pos,
+                batch=batch,
+                edge_index=edge_index,
+                edge_index_star=edge_index_star,
+                edge_attr=edge_attr,
+                edge_attr_star=edge_attr_star,
+                node_vec_attr=node_vec_attr,
+                mask=extra_args["y_mask"].to(x.device),
+                return_attn=return_attn, )
+        else:
+            x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+                x=x,
+                pos=pos,
+                batch=batch,
+                edge_index=edge_index,
+                edge_index_star=edge_index_star,
+                edge_attr=edge_attr,
+                edge_attr_star=edge_attr_star,
+                node_vec_attr=node_vec_attr,
+                return_attn=return_attn, )
+
+        # apply the output network
+        x = self.output_model.pre_reduce(x, v, pos, batch)
+
+        # aggregate residues
+        if extra_args is not None and "y_mask" in extra_args:
+            x = x * extra_args["y_mask"].unsqueeze(2).to(x.device)
+        
+        # # for nodes not connected by edges, set their x to 0
+        # reduce nodes by star graph
+        end_node_count = edge_index_star[1].unique(return_counts=True)
+        end_nodes = end_node_count[0][end_node_count[1] > 1]
+        x, attn_out = self.output_model.reduce(x - x_orig, 
+                                     edge_index_star[:, torch.isin(edge_index_star[1], end_nodes)],
+                                     # Note that edge_attr is actually edge_attr_star here
+                                     edge_attr[torch.isin(edge_index_star[1], end_nodes), :],
+                                     batch)
+        # x = self.output_model.reduce(x, edge_index, edge_attr, batch)
+        attn_weight_layers.append(attn_out)
+        # apply output model after reduction
+        y = self.output_model.post_reduce(x)
+
+        return y, x, attn_weight_layers
+
+
+class PreMode_Star_CON(nn.Module):
+    def __init__(
+            self,
+            representation_model,
+            output_model,
+            alt_projector=None,
+    ):
+        super(PreMode_Star_CON, self).__init__()
+        self.representation_model = representation_model
+        self.output_model = output_model
+        self.alt_projector = alt_projector
+        if alt_projector is not None:
+            # need to have a linear layer to project the concatenated vector to the same dimension as the original vector
+            out_dim = representation_model.x_channels if representation_model.x_in_channels is None else representation_model.x_in_channels
+            self.alt_linear = nn.Sequential(nn.Linear(alt_projector, out_dim, bias=False), nn.SiLU())
+        else:
+            self.alt_linear = None
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.representation_model.reset_parameters()
+        self.output_model.reset_parameters()
+
+    def forward(
+            self,
+            x: Tensor,
+            x_mask: Tensor,
+            x_alt: Tensor,
+            pos: Tensor,
+            edge_index: Tensor,
+            edge_index_star: Tensor = None,
+            edge_attr: Tensor = None,
+            edge_attr_star: Tensor = None,
+            node_vec_attr: Tensor = None,
+            batch: Optional[Tensor] = None,
+            extra_args: Optional[Dict[str, Tensor]] = None,
+            return_attn: bool = False,
+    ) -> Tuple[Tensor, Tensor, List]:
+        
+        # assert x.dim() == 2
+        batch = torch.zeros(x.shape[0], dtype=torch.int64, device=x.device) if batch is None else batch
+
+        # get the graph representation of origin protein first
+        # if there is msa in x, split it
+        # if there is msa in x, split it
+        if (self.representation_model.x_in_channels is not None and x.shape[1] > self.representation_model.x_in_channels):
+            x, msa = x[:, :self.representation_model.x_in_channels], x[:, self.representation_model.x_in_channels:]
+            split = True
+        elif x.shape[1] > self.representation_model.x_channels:
+            x, msa = x[:, :self.representation_model.x_channels], x[:, self.representation_model.x_channels:]
+            split = True
+        else:
+            split = False
+        x_mask = x_mask[:, 0]
+        if self.alt_linear is not None:
+            x_alt = x_alt[:, :self.alt_projector]
+            x_alt = self.alt_linear(x_alt)
+        else:
+            x_alt = x_alt[:, :x.shape[1]]
+        # update x to alt aa
+        x = x * x_mask.unsqueeze(1) + x_alt * (~x_mask).unsqueeze(1)
+        # concat with msa
+        if split:
+            x = torch.cat((x, msa), dim=1)
+
+        # run the potentially wrapped representation model
+        if extra_args is not None and "y_mask" in extra_args:
+            x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+                x=x,
+                pos=pos,
+                batch=batch,
+                edge_index=edge_index,
+                edge_index_star=edge_index_star,
+                edge_attr=edge_attr,
+                edge_attr_star=edge_attr_star,
+                node_vec_attr=node_vec_attr,
+                mask=extra_args["y_mask"].to(x.device),
+                return_attn=return_attn, )
+        else:
+            x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+                x=x,
+                pos=pos,
+                batch=batch,
+                edge_index=edge_index,
+                edge_index_star=edge_index_star,
+                edge_attr=edge_attr,
+                edge_attr_star=edge_attr_star,
+                node_vec_attr=node_vec_attr,
+                return_attn=return_attn, )
+
+        # apply the output network
+        x = self.output_model.pre_reduce(x, v, pos, batch)
+
+        # aggregate residues
+        if extra_args is not None and "y_mask" in extra_args:
+            x = x * extra_args["y_mask"].unsqueeze(2).to(x.device)
+        
+        # # for nodes not connected by edges, set their x to 0
+        # reduce nodes by star graph
+        end_node_count = edge_index_star[1].unique(return_counts=True)
+        end_nodes = end_node_count[0][end_node_count[1] > 1]
+        # if edge_attr is same shape as edge_index_star, it means that edge_attr is actually updated to edge_attr_star
+        if edge_attr is not None and edge_attr.shape[0] == edge_index_star.shape[1]:
+            x, attn_out = self.output_model.reduce(x, 
+                                     edge_index_star[:, torch.isin(edge_index_star[1], end_nodes)],
+                                     edge_attr[torch.isin(edge_index_star[1], end_nodes), :],
+                                     batch)
+        else:
+            # if edge_attr is not updated, use edge_attr_star
+            x, attn_out = self.output_model.reduce(x,
+                                        edge_index_star[:, torch.isin(edge_index_star[1], end_nodes)],
+                                        edge_attr_star[torch.isin(edge_index_star[1], end_nodes), :],
+                                        batch)
+        # x = self.output_model.reduce(x, edge_index, edge_attr, batch)
+        attn_weight_layers.append(attn_out)
+        # apply output model after reduction
+        y = self.output_model.post_reduce(x)
+
+        return y, x, attn_weight_layers
+
+
+class PreMode_Star_GRU(nn.Module):
+    def __init__(
+            self,
+            representation_model,
+            output_model,
+            alt_projector=None,
+    ):
+        super(PreMode_Star_GRU, self).__init__()
+        self.representation_model = representation_model
+        self.output_model = output_model
+        self.alt_projector = alt_projector
+        if alt_projector is not None:
+            # need to have a linear layer to project the concatenated vector to the same dimension as the original vector
+            out_dim = representation_model.x_channels
+            self.alt_linear = nn.Sequential(
+                nn.Linear(alt_projector, out_dim),
+                nn.SiLU(),
+            )
+        else:
+            self.alt_linear = None
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.representation_model.reset_parameters()
+        self.output_model.reset_parameters()
+
+    def forward(
+            self,
+            x: Tensor,
+            x_mask: Tensor,
+            x_alt: Tensor,
+            pos: Tensor,
+            edge_index: Tensor,
+            edge_index_star: Tensor = None,
+            edge_attr: Tensor = None,
+            edge_attr_star: Tensor = None,
+            node_vec_attr: Tensor = None,
+            batch: Optional[Tensor] = None,
+            extra_args: Optional[Dict[str, Tensor]] = None,
+            return_attn: bool = False,
+    ) -> Tuple[Tensor, Tensor, List]:
+        
+        # assert x.dim() == 2
+        batch = torch.zeros(x.shape[0], dtype=torch.int64, device=x.device) if batch is None else batch
+
+        # get the graph representation of origin protein first
+        # if there is msa in x, split it
+        x_mask = x_mask[:, 0]
+        if self.alt_linear is not None:
+            x_alt = x_alt[:, :self.alt_projector]
+            x_alt = self.alt_linear(x_alt)
+        else:
+            x_alt = x_alt[:, :x.shape[1]]
+        # update x to alt aa
+        # x = x * x_mask + x_alt * x_mask
+        # concat with msa
+        # x = torch.cat((x, msa), dim=1)
+
+        # run the potentially wrapped representation model
+        x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
+            x=x,
+            x_center=x_alt,
+            x_mask=x_mask,
+            pos=pos,
+            batch=batch,
+            edge_index=edge_index,
+            edge_index_star=edge_index_star,
+            edge_attr=edge_attr,
+            edge_attr_star=edge_attr_star,
+            node_vec_attr=node_vec_attr,
+            return_attn=return_attn, )
+
+        # apply the output network
+        x = self.output_model.pre_reduce(x, v, pos, batch)
+
+        # aggregate residues
+        if extra_args is not None and "y_mask" in extra_args:
+            x = x * extra_args["y_mask"].unsqueeze(2).to(x.device)
+        
+        # # for nodes not connected by edges, set their x to 0
+        # reduce nodes by star graph
+        end_node_count = edge_index_star[1].unique(return_counts=True)
+        end_nodes = end_node_count[0][end_node_count[1] > 1]
+        x, _ = self.output_model.reduce(x, 
+                                     None,
+                                     # Note that edge_attr is actually edge_attr_star here
+                                     None,
+                                     batch)
+        # x = self.output_model.reduce(x, edge_index, edge_attr, batch)
+
+        # apply output model after reduction
+        y = self.output_model.post_reduce(x)
+
+        return y, x, attn_weight_layers
+
+
+class PreMode_Star_DIFF(nn.Module):
+    def __init__(
+            self,
+            representation_model,
+            output_model,
+            alt_projector=None,
+    ):
+        super(PreMode_Star_DIFF, self).__init__()
         self.representation_model = representation_model
         self.output_model = output_model
 
@@ -173,13 +644,31 @@ class PreMode(nn.Module):
         batch = torch.zeros(x.shape[0], dtype=torch.int64, device=x.device) if batch is None else batch
 
         # get the graph representation of origin protein first
-        x_orig = x
+        # if there is msa in x, split it
+        if (self.representation_model.x_in_channels is not None and x.shape[1] > self.representation_model.x_in_channels) or \
+            x.shape[1] > self.representation_model.x_channels:
+            x_orig, _ = x[:, :self.representation_model.x_channels], x[:, self.representation_model.x_channels:]
+        else:
+            x_orig = x
+        
+        # get the graph representation of origin protein first
+        x_orig, v, pos, _, batch, attn_weight_layers_ref = self.representation_model(
+            x=x,
+            pos=pos,
+            batch=batch,
+            edge_index=edge_index,
+            edge_index_star=edge_index_star,
+            edge_attr=edge_attr,
+            edge_attr_star=edge_attr_star,
+            node_vec_attr=node_vec_attr,
+            return_attn=return_attn, )
+        x_orig = self.output_model.pre_reduce(x_orig, v, pos, batch)
 
         # update x to alt aa
         x = x * x_mask + x_alt
 
         # run the potentially wrapped representation model
-        if "y_mask" in extra_args:
+        if extra_args is not None and "y_mask" in extra_args:
             x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
                 x=x,
                 pos=pos,
@@ -200,30 +689,30 @@ class PreMode(nn.Module):
                 edge_index_star=edge_index_star,
                 edge_attr=edge_attr,
                 edge_attr_star=edge_attr_star,
-                node_vec_attr=node_vec_attr, )
+                node_vec_attr=node_vec_attr,
+                return_attn=return_attn, )
 
         # apply the output network
         x = self.output_model.pre_reduce(x, v, pos, batch)
 
         # aggregate residues
-        if "y_mask" in extra_args:
+        if extra_args is not None and "y_mask" in extra_args:
             x = x * extra_args["y_mask"].unsqueeze(2).to(x.device)
         
-        # # for nodes not connected by edges, set their x to 0
-        # x_in_edge_mask = torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
-        # x_in_edge_mask[edge_index[0]] = True
-        # x_in_edge_mask[edge_index[1]] = True
-        # x = x * x_in_edge_mask.unsqueeze(1)
-        # x_orig = x_orig * x_in_edge_mask.unsqueeze(1)
-        
-        # reduce nodes
-        x = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
+        # reduce nodes by star graph
+        end_node_count = edge_index_star[1].unique(return_counts=True)
+        end_nodes = end_node_count[0][end_node_count[1] > 1]
+        x, _ = self.output_model.reduce(x - x_orig, 
+                                     edge_index_star[:, torch.isin(edge_index_star[1], end_nodes)],
+                                     # Note that edge_attr is actually edge_attr_star here
+                                     edge_attr[torch.isin(edge_index_star[1], end_nodes), :],
+                                     batch)
         # x = self.output_model.reduce(x, edge_index, edge_attr, batch)
 
         # apply output model after reduction
         y = self.output_model.post_reduce(x)
 
-        return y, x, attn_weight_layers
+        return y, x, [attn_weight_layers_ref, attn_weight_layers]
 
 
 class PreMode_SSP(PreMode):
@@ -247,6 +736,8 @@ class PreMode_SSP(PreMode):
             edge_index_star: Tensor = None,
             edge_attr: Tensor = None,
             edge_attr_star: Tensor = None,
+            edge_vec: Tensor = None,
+            edge_vec_star: Tensor = None,
             node_vec_attr: Tensor = None,
             batch: Optional[Tensor] = None,
             extra_args: Optional[Dict[str, Tensor]] = None,
@@ -280,7 +771,7 @@ class PreMode_SSP(PreMode):
         x = self.output_model.pre_reduce(x, v, pos, batch)
 
         # aggregate residues
-        x = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
+        x, _ = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
 
         # apply output model after reduction
         y = self.output_model.post_reduce(x)
@@ -293,6 +784,7 @@ class PreMode_DIFF(PreMode):
             self,
             representation_model,
             output_model,
+            alt_projector=None,
     ):
         super(PreMode_DIFF, self).__init__(representation_model=representation_model,
                                            output_model=output_model,)
@@ -307,6 +799,8 @@ class PreMode_DIFF(PreMode):
             edge_index_star: Tensor = None,
             edge_attr: Tensor = None,
             edge_attr_star: Tensor = None,
+            edge_vec: Tensor = None,
+            edge_vec_star: Tensor = None,
             node_vec_attr: Tensor = None,
             batch: Optional[Tensor] = None,
             extra_args: Optional[Dict[str, Tensor]] = None,
@@ -348,7 +842,7 @@ class PreMode_DIFF(PreMode):
         x = self.output_model.pre_reduce(x, v, pos, batch)
 
         # aggregate residues
-        x = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
+        x, _ = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
 
         # apply output model after reduction
         y = self.output_model.post_reduce(x)
@@ -361,6 +855,7 @@ class PreMode_CON(PreMode):
             self,
             representation_model,
             output_model,
+            alt_projector=None,
     ):
         super(PreMode_CON, self).__init__(representation_model=representation_model,
                                            output_model=output_model,)
@@ -373,6 +868,8 @@ class PreMode_CON(PreMode):
             pos: Tensor,
             edge_index: Tensor,
             edge_index_star: Tensor = None,
+            edge_vec: Tensor = None,
+            edge_vec_star: Tensor = None,
             edge_attr: Tensor = None,
             edge_attr_star: Tensor = None,
             node_vec_attr: Tensor = None,
@@ -412,7 +909,8 @@ class PreMode_CON(PreMode):
                 edge_index_star=edge_index_star,
                 edge_attr=edge_attr,
                 edge_attr_star=edge_attr_star,
-                node_vec_attr=node_vec_attr, )
+                node_vec_attr=node_vec_attr, 
+                return_attn=return_attn,)
 
         # apply the output network
         x = self.output_model.pre_reduce(x, v, pos, batch)
@@ -430,7 +928,7 @@ class PreMode_CON(PreMode):
         
         # reduce nodes
         # x = self.output_model.reduce(x - x_orig, edge_index, edge_attr, batch)
-        x = self.output_model.reduce(x, edge_index, edge_attr, batch)
+        x, _ = self.output_model.reduce(x, edge_index, edge_attr, batch)
 
         # apply output model after reduction
         y = self.output_model.post_reduce(x)
@@ -443,6 +941,7 @@ class PreMode_Mask_Predict(PreMode):
             self,
             representation_model,
             output_model,
+            alt_projector=None,
     ):
         super(PreMode_Mask_Predict, self).__init__(representation_model=representation_model,
                                                    output_model=output_model,)
@@ -457,6 +956,8 @@ class PreMode_Mask_Predict(PreMode):
             edge_index_star: Tensor = None,
             edge_attr: Tensor = None,
             edge_attr_star: Tensor = None,
+            edge_vec: Tensor = None,
+            edge_vec_star: Tensor = None,
             node_vec_attr: Tensor = None,
             batch: Optional[Tensor] = None,
             extra_args: Optional[Dict[str, Tensor]] = None,
@@ -499,6 +1000,7 @@ class PreMode_Single(PreMode):
             self,
             representation_model,
             output_model,
+            alt_projector=None,
     ):
         super(PreMode_Single, self).__init__(representation_model=representation_model,
                                              output_model=output_model,)
@@ -513,6 +1015,8 @@ class PreMode_Single(PreMode):
             edge_index_star: Tensor = None,
             edge_attr: Tensor = None,
             edge_attr_star: Tensor = None,
+            edge_vec: Tensor = None,
+            edge_vec_star: Tensor = None,
             node_vec_attr: Tensor = None,
             batch: Optional[Tensor] = None,
             extra_args: Optional[Dict[str, Tensor]] = None,
@@ -522,8 +1026,28 @@ class PreMode_Single(PreMode):
         assert x.dim() == 2
         batch = torch.zeros(x.shape[0], dtype=torch.int64, device=x.device) if batch is None else batch
 
+        # get the graph representation of origin protein first
+        # if there is msa in x, split it
+        # if there is msa in x, split it
+        if (self.representation_model.x_in_channels is not None and x.shape[1] > self.representation_model.x_in_channels):
+            x, msa = x[:, :self.representation_model.x_in_channels], x[:, self.representation_model.x_in_channels:]
+            split = True
+        elif x.shape[1] > self.representation_model.x_channels:
+            x, msa = x[:, :self.representation_model.x_channels], x[:, self.representation_model.x_channels:]
+            split = True
+        else:
+            split = False
+        x_mask = x_mask[:, 0]
+        if self.alt_linear is not None:
+            x_alt = x_alt[:, :self.alt_projector]
+            x_alt = self.alt_linear(x_alt)
+        else:
+            x_alt = x_alt[:, :x.shape[1]]
         # update x to alt aa
-        x = x * x_mask + x_alt
+        x = x * x_mask.unsqueeze(1) + x_alt * (~x_mask).unsqueeze(1)
+        # concat with msa
+        if split:
+            x = torch.cat((x, msa), dim=1)
 
         # run the potentially wrapped representation model
         x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(
@@ -541,7 +1065,7 @@ class PreMode_Single(PreMode):
         x = self.output_model.pre_reduce(x, v, pos, batch)
 
         # aggregate residues
-        x = self.output_model.reduce(x, edge_index, edge_attr, batch)
+        x, _ = self.output_model.reduce(x, edge_index, edge_attr, batch)
 
         # apply output model after reduction
         y = self.output_model.post_reduce(x)

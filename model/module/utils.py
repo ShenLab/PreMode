@@ -6,7 +6,7 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.nn.functional import mse_loss, l1_loss, binary_cross_entropy, cross_entropy, kl_div
+from torch.nn.functional import mse_loss, l1_loss, binary_cross_entropy, cross_entropy, kl_div, nll_loss
 from torch_geometric.nn import MessagePassing
 
 
@@ -121,6 +121,44 @@ class ExpNormalSmearing(nn.Module):
         )
 
 
+class ExpNormalSmearingUnlimited(nn.Module):
+    def __init__(self, cutoff_lower=0.0, cutoff_upper=5.0, num_rbf=50, trainable=True):
+        super(ExpNormalSmearingUnlimited, self).__init__()
+        self.num_rbf = num_rbf
+        self.trainable = trainable
+
+        self.alpha = 1 / 20
+
+        means, betas = self._initial_params()
+        if trainable:
+            self.register_parameter("means", nn.Parameter(means))
+            self.register_parameter("betas", nn.Parameter(betas))
+        else:
+            self.register_buffer("means", means)
+            self.register_buffer("betas", betas)
+
+    def _initial_params(self):
+        # initialize means and betas according to the default values in PhysNet
+        # https://pubs.acs.org/doi/10.1021/acs.jctc.9b00181
+        start_value = 0.1
+        means = torch.linspace(start_value, 1, self.num_rbf)
+        betas = torch.tensor(
+            [(2 / self.num_rbf * (1 - start_value)) ** -2] * self.num_rbf
+        )
+        return means, betas
+
+    def reset_parameters(self):
+        means, betas = self._initial_params()
+        self.means.data.copy_(means)
+        self.betas.data.copy_(betas)
+
+    def forward(self, dist):
+        dist = dist.unsqueeze(-1)
+        return torch.exp(
+            -self.betas * (torch.exp(self.alpha * (-dist)) - self.means) ** 2
+        )
+
+
 class ShiftedSoftplus(nn.Module):
     def __init__(self):
         super(ShiftedSoftplus, self).__init__()
@@ -204,7 +242,40 @@ class Distance(nn.Module):
         return edge_index, edge_weight, None
 
 
-rbf_class_mapping = {"gauss": GaussianSmearing, "expnorm": ExpNormalSmearing}
+class DistanceV2(nn.Module):
+    def __init__(
+            self,
+            return_vecs=True,
+            loop=False,
+    ):
+        super(DistanceV2, self).__init__()
+        self.return_vecs = return_vecs
+        self.loop = loop
+
+    def forward(self, pos, coords, edge_index):
+        # pos: [N, 3], coordinates of C_a
+        # coords: [N, 3, 4], coordinates of C_b, C, N, O
+        ca_ca = pos[edge_index[1]] - pos[edge_index[0]]
+        cb_cb = coords[edge_index[1], :, [0]] - coords[edge_index[0], :, [0]]
+        cb_N = coords[edge_index[1], :, [2]] - coords[edge_index[0], :, [0]]
+        cb_O = coords[edge_index[1], :, [3]] - coords[edge_index[0], :, [0]]
+        edge_vec = torch.cat([ca_ca.unsqueeze(-1), 
+                              cb_cb.unsqueeze(-1),
+                              cb_N.unsqueeze(-1), 
+                              cb_O.unsqueeze(-1)], dim=-1)
+        mask: Optional[torch.Tensor] = None
+        if self.loop:
+            mask = edge_index[0] != edge_index[1]
+            edge_weight = torch.zeros(ca_ca.size(0), device=ca_ca.device, dtype=ca_ca.dtype)
+            edge_weight[mask] = torch.norm(ca_ca[mask], dim=-1)
+        else:
+            edge_weight = torch.norm(ca_ca, dim=-1)
+
+        return edge_index, edge_weight, edge_vec
+
+
+
+rbf_class_mapping = {"gauss": GaussianSmearing, "expnorm": ExpNormalSmearing, "expnormunlim": ExpNormalSmearingUnlimited}
 
 
 class AbsTanh(nn.Module):
@@ -224,10 +295,19 @@ class Tanh2(nn.Module):
     def forward(x: torch.Tensor) -> torch.Tensor:
         return torch.square(torch.tanh(x))
 
+def gelu(x):
+    """Implementation of the gelu activation function.
+
+    For information: OpenAI GPT's gelu is slightly different
+    (and gives slightly different results):
+    0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
+    """
+    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
 
 act_class_mapping = {
     "ssp": ShiftedSoftplus,
     "silu": nn.SiLU,
+    "leaky_relu": nn.LeakyReLU,
     "tanh": nn.Tanh,
     "sigmoid": nn.Sigmoid,
     "pass": nn.Identity,
@@ -277,6 +357,218 @@ def euclid_contrastive_loss(input, target):
     return loss
 
 
+class WeightedCombinedLoss(nn.modules.loss._WeightedLoss):
+    """
+    Weighted combined loss function.
+    Input weight should be a tensor of shape (5,).
+    The first 2 weights are for the patho/beni loss
+    The last 3 weights are for the beni/gof/lof loss
+    """
+    def __init__(self, weight: Optional[torch.Tensor] = None, 
+                 task_weight: float = 10.0,
+                 size_average=None, ignore_index: int = -100,
+                 reduce=None, reduction: str = 'mean') -> None:
+        super().__init__(weight, size_average, reduce, reduction)
+        self.ignore_index = ignore_index
+        self.task_weight = task_weight
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return combined_loss(input, target,
+                             weight_1=self.weight[:2],
+                             weight_2=self.weight[2:],
+                             weight=self.task_weight,
+                             reduction=self.reduction)
+
+
+class WeightedLoss1(nn.modules.loss._WeightedLoss):
+    """
+    Weighted combined loss function.
+    Input weight should be a tensor of shape (5,).
+    The first 2 weights are for the patho/beni loss
+    The last 3 weights are for the beni/gof/lof loss
+    """
+    def __init__(self, weight: Optional[torch.Tensor] = None, 
+                 task_weight: float = 10.0,
+                 size_average=None, ignore_index: int = -100,
+                 reduce=None, reduction: str = 'mean') -> None:
+        super().__init__(weight, size_average, reduce, reduction)
+        self.ignore_index = ignore_index
+        self.task_weight = task_weight
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # my custom loss function, target should be -1, 0, 1, 3.
+        # -1 represents LoF
+        # 0 represents neutral
+        # 1 represents GoF
+        # 3 represents pathogenic, but unknown LoF or GoF
+        # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+        # the first column is the probability of neutral / pathogenic,
+        # the second column is the probability of GoF / LoF,
+        # reshape target to 1D tensor
+        # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
+        # if target.ndim == 2:
+        #     target = target.squeeze(1)
+        weight_1 = self.weight[:2]
+        target_1 = (target).float()
+        weight_loss_1 = torch.ones_like(target_1, dtype=input.dtype, device=input.device)
+        weight_loss_1[target == 1] = weight_1[1] / weight_1[0]
+        loss_1 = binary_cross_entropy(input=input,
+                                      target=target_1,
+                                      weight=weight_loss_1,
+                                      reduction=self.reduction)
+        return loss_1
+
+class WeightedLoss2(nn.modules.loss._WeightedLoss):
+    """
+    Weighted combined loss function.
+    Input weight should be a tensor of shape (5,).
+    The first 2 weights are for the patho/beni loss
+    The last 3 weights are for the beni/gof/lof loss
+    """
+    def __init__(self, weight: Optional[torch.Tensor] = None, 
+                 task_weight: float = 10.0,
+                 size_average=None, ignore_index: int = -100,
+                 reduce=None, reduction: str = 'mean') -> None:
+        super().__init__(weight, size_average, reduce, reduction)
+        self.ignore_index = ignore_index
+        self.task_weight = task_weight
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # my custom loss function, target should be -1, 0, 1, 3.
+        # -1 represents LoF
+        # 0 represents neutral
+        # 1 represents GoF
+        # 3 represents pathogenic, but unknown LoF or GoF
+        # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+        # the first column is the probability of neutral / pathogenic,
+        # the second column is the probability of GoF / LoF,
+        # reshape target to 1D tensor
+        # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
+        # if target.ndim == 2:
+        #     target = target.squeeze(1)
+        target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).float()
+        loss_1 = binary_cross_entropy(input=input,
+                                      target=target_1,
+                                      reduction=self.reduction)
+        # only do the calculation if target equals -1 or 1
+        filter = (target == -1) | (target == 1)
+        # if filter is all False, then loss_2 is 0
+        if not filter.any():
+            return 0 * loss_1
+        # 1 is !!GoF!!, 0 is !!LoF!!
+        weight_2 = self.weight[2:]
+        # then, we transfer the target to 0, 1, 0 is !!GoF!!, 1 is !!LoF!!
+        target_2 = (1/2 * (-target + 1)).float()
+        # loss_2 is the cross entropy loss on pathogenic / neutral / GoF
+        weight_loss_2 = torch.ones_like(target_2, dtype=input.dtype, device=input.device)
+        weight_loss_2[target == 1] = weight_2[1] / weight_2[0]
+        loss_2 = binary_cross_entropy(input=input[filter],
+                                      target=target_2[filter],
+                                      weight=weight_loss_2[filter],
+                                      reduction=self.reduction)
+        return loss_2
+
+
+def combined_loss_archive(input: torch.Tensor, target: torch.Tensor,
+                  weight: float=10.0, 
+                  weight_1: Optional[torch.Tensor]=None, 
+                  weight_2: Optional[torch.Tensor]=None,
+                  reduction: str = 'mean') -> torch.Tensor:
+    # my custom loss function, target should be -1, 0, 1, 3.
+    # -1 represents LoF
+    # 0 represents neutral
+    # 1 represents GoF
+    # 3 represents pathogenic, but unknown LoF or GoF
+    # input should be the output of the model, which is a 2D tensor with shape [batch_size, 3]
+    # the first column is the probability of neutral,
+    # the second column is the probability of neutral, 
+    # the third column is the probability of GoF
+    # reshape target to 1D tensor
+    if target.ndim == 2:
+        target = target.squeeze(1)
+    # first, we transfer the target to 0, 1
+    target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).long()
+    # then, we transfer the target to 0, 1, 2
+    target_2 = (3/2 * target ** 2 + 1/2 * target).long()
+    # then we normalize the input with LogSoftmax
+    input = F.log_softmax(input, dim=1)
+    # loss_1 is the cross entropy loss on pathogenic / neutral
+    # use a kernel to sum the last two columns of input
+    kernel = torch.tensor([[1, 0], [0, 1], [0, 1]], dtype=input.dtype, device=input.device)
+    loss_1 = nll_loss(input=torch.log(torch.matmul(torch.exp(input), kernel)),
+                      target=target_1,
+                      weight=weight_1,
+                      reduction=reduction)
+    # loss_2 is the cross entropy loss on pathogenic / neutral / GoF
+    # only do the calculation if target equals -1 or 1
+    filter = (target == -1) | (target == 1)
+    # if filter is all False, then loss_2 is 0
+    if not filter.any():
+        return loss_1
+    else:
+        filter = (target == -1) | (target == 1) | (target == 0)
+    loss_2 = nll_loss(input=input[filter],
+                      target=target_2[filter],
+                      weight=weight_2,
+                      reduction=reduction)
+    # assume LoF / GoF task is more important, so we add a weight of 10 to loss_2
+    # if no benign variants, ignore loss_1
+    if not (target == 0).any():
+        loss = loss_2
+    else:
+        loss = loss_1 + weight * loss_2
+    return loss
+
+
+def combined_loss(input: torch.Tensor, target: torch.Tensor,
+                  weight: float=10.0, 
+                  weight_1: Optional[torch.Tensor]=None, 
+                  weight_2: Optional[torch.Tensor]=None,
+                  reduction: str = 'mean') -> torch.Tensor:
+    # my custom loss function, target should be -1, 0, 1, 3.
+    # -1 represents LoF
+    # 0 represents neutral
+    # 1 represents GoF
+    # 3 represents pathogenic, but unknown LoF or GoF
+    # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+    # the first column is the probability of neutral / pathogenic,
+    # the second column is the probability of GoF / LoF,
+    # reshape target to 1D tensor
+    if target.ndim == 2:
+        target = target.squeeze(1)
+    # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
+    target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).float()
+    # then, we transfer the target to 0, 1, 0 is LoF, 1 is GoF
+    target_2 = (1/2 * (target + 1)).float()
+    # loss_1 is the cross entropy loss on pathogenic / neutral
+    # define weight for loss_1
+    weight_loss_1 = torch.ones_like(target_1, dtype=input.dtype, device=input.device)
+    weight_loss_1[target_1 == 1] = weight_1[0] / weight_1[1]
+    loss_1 = binary_cross_entropy(input=input[:, 0],
+                                  target=target_1,
+                                  weight=weight_loss_1,
+                                  reduction=reduction)
+    # loss_2 is the cross entropy loss on pathogenic / neutral / GoF
+    # only do the calculation if target equals -1 or 1
+    filter = (target == -1) | (target == 1)
+    # if filter is all False, then loss_2 is 0
+    if not filter.any():
+        return loss_1
+    weight_loss_2 = torch.ones_like(target_2, dtype=input.dtype, device=input.device)
+    weight_loss_2[target_2 == 1] = weight_2[0] / weight_2[1]
+    loss_2 = binary_cross_entropy(input=input[filter, 1],
+                                  target=target_2[filter],
+                                  weight=weight_loss_2[filter],
+                                  reduction=reduction)
+    # assume LoF / GoF task is more important, so we add a weight of 10 to loss_2
+    # if no benign variants, ignore loss_1
+    if not (target == 0).any():
+        loss = loss_2
+    else:
+        loss = loss_1 + weight * loss_2
+    return loss
+
+
 loss_fn_mapping = {
     "mse_loss": mse_loss,
     "l1_loss": l1_loss,
@@ -285,6 +577,10 @@ loss_fn_mapping = {
     "kl_div": kl_div,
     "cosin_contrastive_loss": cosin_contrastive_loss,
     "euclid_contrastive_loss": euclid_contrastive_loss,
+    "combined_loss": combined_loss,
+    "weighted_combined_loss": WeightedCombinedLoss,
+    "weighted_loss": WeightedLoss2,
+    "weighted_loss_pretrain": WeightedLoss1,   
 }
 
 

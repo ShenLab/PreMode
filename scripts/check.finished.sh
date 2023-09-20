@@ -1,6 +1,6 @@
 #!/bin/bash
 # $1 is the name of the scripts folder
-cd /share/terra/Users/gz2294/RESCVE.final
+cd /share/terra/Users/gz2294/PreMode.final
 # check if task has finished
 logdir=$(cat $1 | grep log_dir | sed 's/.*: //')
 num_epochs=$(cat $1 | grep num_epochs | sed 's/.*: //')

@@ -594,7 +594,18 @@ def reshuffle_train_by_uniprot_id_good_batch(idx_train, batch_size, dset, seed=N
 
 
 def reshuffle_train_by_anno(idx_train, batch_size, dset, seed=None):
-    idx_train = np.random.permutation(idx_train)
+    if seed is not None:
+        idx_train = np.random.default_rng(seed).permutation(idx_train)
+    else:
+        idx_train = np.random.permutation(idx_train)
+    return idx_train
+
+
+def reshuffle_train(idx_train, batch_size, dset, seed=None):
+    if seed is not None:
+        idx_train = np.random.default_rng(seed).permutation(idx_train)
+    else:
+        idx_train = np.random.permutation(idx_train)
     return idx_train
 
 
@@ -697,9 +708,12 @@ def guarantee_good_batch(idxs, batch_size, dset, seed=0):
     if not isinstance(idxs, np.ndarray):
         idxs = np.array(idxs)
     # first get all positives and negatives
-    pos_idxs = idxs[dset.data[dset._y_columns[0]].iloc[idxs] == 1]
+    pos_label = 3
+    if sum(dset.data[dset._y_columns[0]].iloc[idxs] == 1) > 0:
+        pos_label = 1
+    pos_idxs = idxs[dset.data[dset._y_columns[0]].iloc[idxs] == pos_label]
     pos_ids = dset.data["uniprotID"].iloc[pos_idxs].to_numpy()
-    neg_idxs = idxs[dset.data[dset._y_columns[0]].iloc[idxs] != 1]
+    neg_idxs = idxs[dset.data[dset._y_columns[0]].iloc[idxs] != pos_label]
     neg_ids = dset.data["uniprotID"].iloc[neg_idxs].to_numpy()
     # assume idxs and protein_identifiers are shuffled
     result = []

@@ -31,8 +31,17 @@ class GraphMutationDataset(Dataset):
                  add_plddt: bool = False, 
                  add_conservation: bool = False,
                  add_position: bool = False,
+                 add_sidechain: bool = False,
+                 local_coord_transform: bool = False,
+                 use_cb: bool = False,
                  add_msa_contacts: bool = True,
+                 add_dssp: bool = False,
+                 add_msa: bool = False,
+                 data_augment: bool = False,
+                 score_transfer: bool = False,
+                 alt_type: Literal['alt', 'concat', 'diff'] = 'alt',
                  computed_graph: bool = True,
+                 loaded_msa: bool = False,
                  neighbor_type: Literal['KNN', 'radius'] = 'KNN',
                  max_len = 2251,
                  ):
@@ -41,7 +50,10 @@ class GraphMutationDataset(Dataset):
             self.data = data_file
             self.data_file = 'pd.DataFrame'
         elif isinstance(data_file, str):
-            self.data = pd.read_csv(data_file, index_col=0)
+            try:
+                self.data = pd.read_csv(data_file, index_col=0, low_memory=False)
+            except:
+                self.data = pd.read_csv(data_file, index_col=0)
             self.data_file = data_file
         else:
             raise ValueError("data_path must be a string or a pandas.DataFrame")
@@ -53,14 +65,40 @@ class GraphMutationDataset(Dataset):
         self.add_plddt = add_plddt
         self.add_conservation = add_conservation
         self.add_position = add_position
+        self.use_cb = use_cb
+        self.add_sidechain = add_sidechain
         self.add_msa_contacts = add_msa_contacts
+        self.add_dssp = add_dssp
+        self.add_msa = add_msa
+        self.loaded_msa = loaded_msa
+        self.alt_type = alt_type
         self.max_len = max_len
+        self.loop = loop
+        self.data_augment = data_augment
         self._check_embedding_files()
+        if score_transfer:
+            # only do score_transfer when score is 0 or 1
+            if set(self.data['score'].unique()) <= {0, 1}:
+                self.data['score'] = self.data['score'] * 3
+            else:
+                warnings.warn("score_transfer is only applied when score is 0 or 1")
+        if data_augment and set(self.data['score'].unique()) > {0, 1}:
+            # reverse ref and alt and score, only when we do gof/lof
+            reverse_data = self.data.copy()
+            # reverse only for score == 1 and score == 0
+            reverse_data = reverse_data.loc[(reverse_data['score'] == 1) | (reverse_data['score'] == 0), :]
+            reverse_data['ref'] = self.data['alt']
+            reverse_data['alt'] = self.data['ref']
+            reverse_data['score'] = -reverse_data['score']
+            self.data = pd.concat([self.data, reverse_data], ignore_index=True)
         self._set_mutations()
         self.computed_graph = computed_graph
         self._load_af2_features(radius=radius, max_neighbors=max_neighbors, loop=loop, gpu_id=gpu_id)
+        if (self.add_msa or self.add_conservation) and self.loaded_msa:
+            self._load_msa_features()
         self._set_node_embeddings()
         self._set_edge_embeddings()
+        self.unmatched_msa = 0
         # TODO: consider load language model embeddings to RAM
         # shuffle the data
         if shuffle:
@@ -89,6 +127,16 @@ class GraphMutationDataset(Dataset):
     def _set_mutations(self):
         if 'af2_file' not in self.data.columns:
             self.data['af2_file'] = pd.NA
+        for i in range(len(self.data)):
+            res = utils.get_mutations(self.data['uniprotID'].iloc[i],
+                                self.data['ENST'].iloc[i],
+                                self.data['wt.orig'].iloc[i],
+                                self.data['sequence.len.orig'].iloc[i],
+                                self.data['pos.orig'].iloc[i],
+                                self.data['ref'].iloc[i],
+                                self.data['alt'].iloc[i],
+                                self.max_len,
+                                self.data['af2_file'].iloc[i])
         with Pool(NUM_THREADS) as p:
             point_mutations = p.starmap(utils.get_mutations, zip(self.data['uniprotID'],
                                                                  self.data['ENST'],
@@ -99,7 +147,8 @@ class GraphMutationDataset(Dataset):
                                                                  self.data['alt'], 
                                                                  cycle([self.max_len]),
                                                                  self.data['af2_file'],))
-        # drop the data that does not have coordinates
+        # drop the data that does not have coordinates if we are using af2
+        # if self.graph_type == 'af2':
         print(f"drop {np.sum(~np.array(point_mutations, dtype=bool))} mutations that don't have coordinates")
         self.data = self.data.loc[np.array(point_mutations, dtype=bool)]
         self.mutations = list(filter(bool, point_mutations))
@@ -110,8 +159,9 @@ class GraphMutationDataset(Dataset):
                                                     return_inverse=True)
         _ = list(map(lambda x, y: x.set_af2_seq_index(y), self.mutations, mutation_idx))
         with Pool(NUM_THREADS) as p:
-            self.af2_coord_dict = p.starmap(utils.get_coords_from_af2, zip(self.af2_file_dict))
+            self.af2_coord_dict = p.starmap(utils.get_coords_from_af2, zip(self.af2_file_dict, cycle([self.add_sidechain])))
             self.af2_plddt_dict = p.starmap(utils.get_plddt_from_af2, zip(self.af2_file_dict)) if self.add_plddt else None
+            self.af2_dssp_dict = p.starmap(utils.get_dssp_from_af2, zip(self.af2_file_dict)) if self.add_dssp else None
         print(f'Finished loading {len(self.af2_coord_dict)} af2 coords')
         if self.computed_graph:
             if self.graph_type == 'af2':
@@ -133,7 +183,16 @@ class GraphMutationDataset(Dataset):
         self.max_neighbors = max_neighbors
         self.loop = loop
         self.gpu_id = gpu_id
-
+    
+    def _load_msa_features(self):
+        self.msa_file_dict, mutation_idx = np.unique([mutation.uniprot_id for mutation in self.mutations],
+                                                     return_inverse=True)
+        _ = list(map(lambda x, y: x.set_msa_seq_index(y), self.mutations, mutation_idx))
+        with Pool(NUM_THREADS) as p:
+            # msa_dict: msa_seq, conservation, msa
+            self.msa_dict = p.starmap(utils.get_msa_dict_from_transcript, zip(self.msa_file_dict))
+        print(f'Finished loading {len(self.msa_dict)} msa seqs')
+        
     def _set_node_embeddings(self):
         pass
 
@@ -176,7 +235,8 @@ class GraphMutationDataset(Dataset):
         edge_matrix_star[mask_idx, :] = 1
         edge_index_star = np.array(np.where(edge_matrix_star == 1))
         # cancel self loop
-        edge_index_star = edge_index_star[:, edge_index_star[0] != edge_index_star[1]]
+        if not self.loop:
+            edge_index_star = edge_index_star[:, edge_index_star[0] != edge_index_star[1]]
         # cancel nodes that not in edge_index
         edge_index_star = edge_index_star[:, np.isin(edge_index_star[0], edge_index.flatten()) &
                                           np.isin(edge_index_star[1], edge_index.flatten())]
@@ -212,30 +272,55 @@ class GraphMutationDataset(Dataset):
             embed_data = utils.get_embedding_from_esm2(mutation.ESM_prefix, False,
                                                        mutation.seq_start, mutation.seq_end)
             to_alt = np.concatenate([utils.ESM_AA_EMBEDDING_DICT[alt_aa].reshape(1, -1) for alt_aa in mutation.alt_aa])
+            to_ref = np.concatenate([utils.ESM_AA_EMBEDDING_DICT[ref_aa].reshape(1, -1) for ref_aa in mutation.ref_aa])
         elif self.node_embedding_type == 'one-hot-idx':
             assert not self.add_conservation and not self.add_plddt
             embed_logits, embed_data, one_hot_mat = utils.get_embedding_from_onehot_nonzero(mutation.seq, return_idx=True, return_onehot_mat=True)
             to_alt = np.concatenate([np.array(utils.AA_DICT.index(alt_aa)).reshape(1, -1) for alt_aa in mutation.alt_aa])
+            to_ref = np.concatenate([np.array(utils.AA_DICT.index(ref_aa)).reshape(1, -1) for ref_aa in mutation.ref_aa])
         elif self.node_embedding_type == 'one-hot':
             embed_data, one_hot_mat = utils.get_embedding_from_onehot(mutation.seq, return_idx=False, return_onehot_mat=True)
-            to_alt = np.concatenate([np.eye(len(utils.AA_DICT))[utils.AA_DICT.index(alt_aa)].reshape(1, -1) 
-                                     for alt_aa in mutation.alt_aa])
+            to_alt = np.concatenate([np.eye(len(utils.AA_DICT))[utils.AA_DICT.index(alt_aa)].reshape(1, -1) for alt_aa in mutation.alt_aa])
+            to_ref = np.concatenate([np.eye(len(utils.AA_DICT))[utils.AA_DICT.index(ref_aa)].reshape(1, -1) for ref_aa in mutation.ref_aa])
         elif self.node_embedding_type == 'aa-5dim':
             embed_data = utils.get_embedding_from_5dim(mutation.seq)
             to_alt = np.concatenate([np.array(utils.AA_5DIM_EMBED[alt_aa]).reshape(1, -1) for alt_aa in mutation.alt_aa])
+            to_ref = np.concatenate([np.array(utils.AA_5DIM_EMBED[ref_aa]).reshape(1, -1) for ref_aa in mutation.ref_aa])
         elif self.node_embedding_type == 'esm1b':
             embed_data = utils.get_embedding_from_esm1b(mutation.ESM_prefix, False,
                                                         mutation.seq_start, mutation.seq_end)
             to_alt = np.concatenate([utils.ESM1b_AA_EMBEDDING_DICT[alt_aa].reshape(1, -1) for alt_aa in mutation.alt_aa])
+            to_ref = np.concatenate([utils.ESM1b_AA_EMBEDDING_DICT[ref_aa].reshape(1, -1) for ref_aa in mutation.ref_aa])
         # add conservation, if needed
+        if self.loaded_msa:
+            msa_seq = self.msa_dict[mutation.msa_seq_index][0]
+            conservation_data = self.msa_dict[mutation.msa_seq_index][1]
+            msa_data = self.msa_dict[mutation.msa_seq_index][2]
+        else:
+            if self.add_conservation or self.add_msa:
+                msa_seq, conservation_data, msa_data = utils.get_msa_dict_from_transcript(mutation.uniprot_id)
         if self.add_conservation:
-            conservation_data = utils.get_conservation_from_msa(mutation, False)
+            if conservation_data.shape[0] == 0:
+                conservation_data = np.zeros((embed_data.shape[0], 20))
+            else:
+                msa_seq_check = msa_seq[mutation.seq_start_orig - 1: mutation.seq_end_orig]
+                conservation_data = conservation_data[mutation.seq_start_orig - 1: mutation.seq_end_orig]
+                if mutation.crop:
+                    msa_seq_check = msa_seq_check[mutation.seq_start - 1: mutation.seq_end]
+                    conservation_data = conservation_data[mutation.seq_start - 1: mutation.seq_end]
+                if msa_seq_check != mutation.seq:
+                    # warnings.warn(f'MSA file: {mutation.transcript_id} does not match mutation sequence')
+                    self.unmatched_msa += 1
+                    print(f'Unmatched MSA: {self.unmatched_msa}')
+                    conservation_data = np.zeros((embed_data.shape[0], 20))
             embed_data = np.concatenate([embed_data, conservation_data], axis=1)
             to_alt = np.concatenate([to_alt, conservation_data[mask_idx]], axis=1)
+            if self.alt_type == 'diff':
+                to_ref = np.concatenate([to_ref, conservation_data[mask_idx]], axis=1)
         # add pLDDT, if needed
         if self.add_plddt:
             # get plddt
-            plddt_data = utils.get_plddt_from_af2(mutation.af2_file)
+            plddt_data = self.af2_plddt_dict[mutation.af2_seq_index]  # N, C, O, CA, CB
             if mutation.crop:
                 plddt_data = plddt_data[mutation.seq_start - 1: mutation.seq_end]
             if plddt_data.shape[0] != embed_data.shape[0]:
@@ -245,17 +330,65 @@ class GraphMutationDataset(Dataset):
                 plddt_data = np.zeros_like(embed_data[:, 0])
             embed_data = np.concatenate([embed_data, plddt_data[:, None]], axis=1)
             to_alt = np.concatenate([to_alt, plddt_data[mask_idx, None]], axis=1)
+            if self.alt_type == 'diff':
+                to_ref = np.concatenate([to_ref, plddt_data[mask_idx]], axis=1)
+        # add dssp, if needed
+        if self.add_dssp:
+            # get dssp
+            dssp_data = self.af2_dssp_dict[mutation.af2_seq_index]
+            if mutation.crop:
+                dssp_data = dssp_data[mutation.seq_start - 1: mutation.seq_end]
+            if dssp_data.shape[0] != embed_data.shape[0]:
+                warnings.warn(f'DSSP {dssp_data.shape[0]} does not match embedding {embed_data.shape[0]}, '
+                                f'DSSP file: {mutation.af2_file}, '
+                                f'ESM prefix: {mutation.ESM_prefix}')
+                dssp_data = np.zeros_like(embed_data[:, 0])
+            embed_data = np.concatenate([embed_data, dssp_data], axis=1)
+            to_alt = np.concatenate([to_alt, dssp_data[mask_idx]], axis=1)
+            if self.alt_type == 'diff':
+                to_ref = np.concatenate([to_ref, dssp_data[mask_idx]], axis=1)
+        if self.add_msa:
+            if msa_data.shape[0] == 0:
+                msa_data = np.zeros((embed_data.shape[0], 199))
+            else:
+                msa_seq_check = msa_seq_check[mutation.seq_start_orig - 1: mutation.seq_end_orig]
+                msa_data = msa_data[mutation.seq_start_orig - 1: mutation.seq_end_orig]
+                if mutation.crop:
+                    msa_seq_check = msa_seq_check[mutation.seq_start - 1: mutation.seq_end]
+                    msa_data = msa_data[mutation.seq_start - 1: mutation.seq_end]
+                if msa_seq_check != mutation.seq:
+                    # warnings.warn(f'MSA file: {mutation.transcript_id} does not match mutation sequence')
+                    msa_data = np.zeros((embed_data.shape[0], 199))
+            embed_data = np.concatenate([embed_data, msa_data], axis=1)
+            if self.alt_type == 'alt':
+                to_alt = np.concatenate([to_alt, msa_data[mask_idx]], axis=1)
+            if self.alt_type == 'diff':
+                to_ref = np.concatenate([to_ref, msa_data[mask_idx]], axis=1)
         # replace the embedding with the mutation, note pos is 1-based
         # but we don't modify the embedding matrix, instead we return a mask matrix
         embed_data_mask = np.ones_like(embed_data)
         embed_data_mask[mask_idx] = 0
-        alt_embed_data = np.zeros_like(embed_data)
-        alt_embed_data[mask_idx] = to_alt
+        if self.alt_type == 'alt':
+            alt_embed_data = np.zeros_like(embed_data)
+            alt_embed_data[mask_idx] = to_alt
+        elif self.alt_type == 'concat':
+            alt_embed_data = np.zeros((embed_data.shape[0], to_alt.shape[1] + to_ref.shape[1]))
+            alt_embed_data[mask_idx] = np.concatenate([to_alt, to_ref], axis=1)
+        elif self.alt_type == 'diff':
+            alt_embed_data = np.zeros_like(embed_data)
+            alt_embed_data[mask_idx] = to_alt
+            embed_data[mask_idx] = to_ref
+        else:
+            raise ValueError(f'alt_type {self.alt_type} not supported')
         # prepare node vector features
         # get CA_coords
         CA_coord = coords[:, 3]
+        CB_coord = coords[:, 4]
+        # add CB_coord for GLY
+        CB_coord[np.isnan(CB_coord)] = CA_coord[np.isnan(CB_coord)]
         if self.graph_type == '1d-neighbor':
             CA_coord[:, 0] = np.arange(coords.shape[0])
+            CB_coord[:, 0] = np.arange(coords.shape[0])
             coords = np.zeros_like(coords)
         CA_CB = coords[:, [4]] - coords[:, [3]]  # Note that glycine does not have CB
         CA_CB[np.isnan(CA_CB)] = 0
@@ -265,6 +398,12 @@ class GraphMutationDataset(Dataset):
         CA_O = coords[:, [2]] - coords[:, [3]]
         CA_N = coords[:, [0]] - coords[:, [3]]
         nodes_vector = np.transpose(np.concatenate([CA_CB, CA_C, CA_O, CA_N], axis=1), (0, 2, 1))
+        if self.add_sidechain:
+            # get sidechain coords
+            sidechain_nodes_vector = coords[:, 5:] - coords[:, [3]]
+            sidechain_nodes_vector[np.isnan(sidechain_nodes_vector)] = 0
+            sidechain_nodes_vector = np.transpose(sidechain_nodes_vector, (0, 2, 1))
+            nodes_vector = np.concatenate([nodes_vector, sidechain_nodes_vector], axis=2)
         # prepare graph
         features = dict(
             embed_logits=embed_logits if self.node_embedding_type == 'one-hot-idx' else None,
@@ -275,6 +414,7 @@ class GraphMutationDataset(Dataset):
             alt_embed_data=alt_embed_data,
             coords=coords,
             CA_coord=CA_coord,
+            CB_coord=CB_coord,
             edge_index=edge_index,
             edge_index_star=edge_index_star,
             edge_attr=edge_attr,
@@ -293,7 +433,7 @@ class GraphMutationDataset(Dataset):
             x=x,
             x_mask=torch.from_numpy(features_np['embed_data_mask']).to(torch.bool),
             x_alt=torch.from_numpy(features_np['alt_embed_data']).to(torch.float32),
-            pos=torch.from_numpy(features_np['CA_coord']).to(torch.float32),
+            pos=torch.from_numpy(features_np['CA_coord']).to(torch.float32) if not self.use_cb else torch.from_numpy(features_np['CB_coord']).to(torch.float32),
             edge_index=torch.from_numpy(features_np['edge_index']).to(torch.long),
             edge_index_star=torch.from_numpy(features_np['edge_index_star']).to(torch.long),
             edge_attr=torch.from_numpy(features_np['edge_attr']).to(torch.float32),
@@ -301,6 +441,12 @@ class GraphMutationDataset(Dataset):
             node_vec_attr=torch.from_numpy(features_np['nodes_vector']).to(torch.float32),
             y=torch.tensor([self.data[self._y_columns].iloc[int(idx)]]).to(torch.float32),
         )
+        # if self.alt_type == 'concat':
+        #     features['edge_index'] = None
+        #     features['edge_attr'] = None
+        # else:
+        #     features["edge_index"], features["edge_attr"], mask = \
+        #         remove_isolated_nodes(features["edge_index"], features["edge_attr"], x.shape[0])
         features["edge_index"], features["edge_attr"], mask = \
             remove_isolated_nodes(features["edge_index"], features["edge_attr"], x.shape[0])
         features["edge_index_star"], features["edge_attr_star"], mask = \
@@ -320,6 +466,24 @@ class GraphMutationDataset(Dataset):
 
     def len(self) -> int:
         return len(self.mutations)
+    
+    def get_label_counts(self) -> np.ndarray:
+        if self.data.columns.isin(['score']).any():
+            if (-1 in self.data['score'].values):
+                lof = (self.data['score']==-1).sum()
+                benign = (self.data['score']==0).sum()
+                gof = (self.data['score']==1).sum()
+                patho = (self.data['score']==3).sum()
+                if lof != 0 and gof != 0:
+                    return np.array([lof, benign, gof, patho])
+                else:
+                    return np.array([benign, patho])
+            else:
+                benign = (self.data['score']==0).sum()
+                patho = (self.data['score']==1).sum()
+                return np.array([benign, patho])
+        else:
+            return np.array([0, 0])
 
 
 class MutationDataset(GraphMutationDataset):

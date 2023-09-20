@@ -2,15 +2,15 @@
 # $1 is the name of the scripts folder
 # pretrain.seed.0.yaml: main file, the pretrain model
 # first select the best model for TL based on validation dataset in pretrain
-cd /share/terra/Users/gz2294/RESCVE.final
+cd /share/terra/Users/gz2294/PreMode.final
 # prepare yaml files for subset tasks
-for gene in PTEN CCR5 CXCR4 NUDT15 VKORC1 IonChannel
+for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 VKORC1 IonChannel.chps.even.uniprotID
 do
   mkdir $1/$gene.subsets/
   for subset in 1 2 4 6
   do
     mkdir $1/$gene.subsets/subset.$subset
-    for seed in 0 1 2
+    for seed in {0..4}
     do
       cp $1/$gene/$gene.seed.$seed.yaml $1/$gene.subsets/subset.$subset/seed.$seed.yaml
       # change training dataset

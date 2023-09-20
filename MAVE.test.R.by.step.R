@@ -5,8 +5,9 @@ base.dir <- args[1]
 result <- data.frame()
 tasks <- c("PTEN", "NUDT15", "CCR5", "CXCR4", "VKORC1")
 for (task in tasks) {
-  for (seed in 0:2) {
-    configs <- yaml::read_yaml(paste0(base.dir, task, '/', task, '.seed.', seed, '.yaml'))
+  for (seed in 0:4) {
+    print(paste0("Begin ", task, " fold ", seed))
+    configs <- yaml::read_yaml(paste0(base.dir, task, '.5fold/', task, '.fold.', seed, '.yaml'))
     res <- get.R.by.step(configs)
     R2s <- as.data.frame(res[,startsWith(colnames(res), "R2")])
     df <- data.frame(task = task,

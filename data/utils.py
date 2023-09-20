@@ -4,11 +4,14 @@ import pickle
 from abc import abstractmethod
 from os.path import exists
 from typing import List
-
+import string
+import random
 import biotite.structure
 import numpy as np
 import pandas as pd
 import torch
+from Bio.PDB import PDBParser
+from Bio.PDB.DSSP import DSSP
 from biopandas.pdb import PandasPdb
 from biotite.sequence import ProteinSequence
 from biotite.structure import get_chains
@@ -17,28 +20,30 @@ from biotite.structure.residues import get_residues
 from torch_cluster import radius_graph, knn_graph
 
 # Path to the AF2 data
-AF2_DATA_PATH = '/share/terra/Users/gz2294/ld1/Data/Protein/alphafold2_v4/swissprot'
-AF2_SEQ_DICT = pd.read_csv('/share/terra/Users/gz2294/Data/Protein/alphafold2_v4/swissprot_and_human.csv',
+AF2_DATA_PATH = '/share/pascal/Users/gz2294/Data/af2_uniprot/alphafold2_v4'
+AF2_SEQ_DICT = pd.read_csv('/share/pascal/Users/gz2294/Data/af2_uniprot/uniprot.swissprot.csv',
                            index_col=0).set_index('file_name').T.to_dict()
 # Path to the AF2 data
 ESM_MODEL_SIZE = '650M'
-ESM_DATA_PATH = f'/share/vault/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm2.{ESM_MODEL_SIZE}.embedding.uniprotIDs/'
+ESM_DATA_PATH = f'/share/ark/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm2.{ESM_MODEL_SIZE}.embedding.uniprotIDs/'
 # Path to the ESM2 data
-MSA_DATA_PATH = '/share/terra/Projects/MVP/gMVP/combined_feature_2021_v2/'
+MSA_DATA_PATH_ARCHIVE = '/share/pascal/Projects/gMVP/combined_feature_2021_v2/'
+MSA_DATA_PATH = '/share/ark/Users/yz3419/variant/MSA/MSA_orthologues/'
 # Path to the ESM_MSA data
-MSA_ATTN_DATA_PATH = '/share/terra/Users/gz2294/ld1/Data/DMS/gMVP/msa_representations/'
+# TODO: update the path
+MSA_ATTN_DATA_PATH = '/share/pascal/Users/gz2294/Data/gMVP.esm.MSA/'
 NUM_THREADS = 42
 # prepare esm2 embeddings
-with open(f'/share/terra/Users/gz2294/RESCVE/utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'/share/pascal/Users/gz2294/PreMode/utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     LANGUAGE_MODEL = pickle.load(f)
-with open(f'/share/terra/Users/gz2294/RESCVE/utils/ALPHABET_CONVERTER.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'/share/pascal/Users/gz2294/PreMode/utils/ALPHABET_CONVERTER.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     ALPHABET_CONVERTER = pickle.load(f)
-with open(f'/share/terra/Users/gz2294/RESCVE/utils/ESM_AA_EMBEDDING_DICT.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'/share/pascal/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     ESM_AA_EMBEDDING_DICT = pickle.load(f)
-with open(f'/share/terra/Users/gz2294/RESCVE/utils/ESM_AA_EMBEDDING_DICT.esm1b.pkl', 'rb') as f:
+with open(f'/share/pascal/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.esm1b.pkl', 'rb') as f:
     ESM1b_AA_EMBEDDING_DICT = pickle.load(f)
 # prepare 5dim embeddings
-with open(f'/share/terra/Users/gz2294/RESCVE/utils/AA_5_DIM_EMBED.pkl', 'rb') as f:
+with open(f'/share/pascal/Users/gz2294/PreMode/utils/AA_5_DIM_EMBED.pkl', 'rb') as f:
     AA_5DIM_EMBED = pickle.load(f)
 # ESM tokens
 ESM_TOKENS = ['<cls>', '<pad>', '<eos>', '<unk>',
@@ -50,7 +55,7 @@ ESM_TOKENS = ['<cls>', '<pad>', '<eos>', '<unk>',
 AA_DICT = ['L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
            'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C',
            'X', 'B', 'U', 'Z', 'O', '<mask>']
-
+DSSP_DICT = ['H', 'B', 'E', 'G', 'I', 'T', 'S', '-', 'P']
 
 class Mutation:
     """
@@ -69,6 +74,7 @@ class Mutation:
         self.uniprot_id = None
         self.af2_file = None
         self.af2_seq_index = None
+        self.msa_seq_index = None
         self.ref_aa = None
         self.alt_aa = None
         self.ESM_prefix = None
@@ -195,6 +201,9 @@ class Mutation:
     def set_af2_seq_index(self, idx):
         self.af2_seq_index = idx
 
+    def set_msa_seq_index(self, idx):
+        self.msa_seq_index = idx
+
 
 class RandomPointMutation(Mutation):
     def __init__(self, uniprot_id, transcript_id, seq_orig, seq_orig_len, max_len=2251):
@@ -280,6 +289,25 @@ def extract_coords_from_structure(structure: biotite.structure.AtomArray):
     return coords
 
 
+def extract_sidechain_from_structure(structure: biotite.structure.AtomArray):
+    """
+    Args:
+        structure: An instance of biotite AtomArray
+    Returns:
+        Tuple coords
+            - coords is an L x 31 x 3 array for side chain coordinates
+    """
+    coords = get_atom_coords_residue_wise(['CD', 'CD1', 'CD2', 'CE', 'CE1',
+                                           'CE2', 'CE3', 'CG', 'CG1', 'CG2', 
+                                           'CH2', 'CZ', 'CZ2', 'CZ3', 'ND1',
+                                           'ND2', 'NE', 'NE1', 'NE2', 'NH1',
+                                           'NH2', 'NZ', 'OD1', 'OD2', 'OE1',
+                                           'OE2', 'OG', 'OG1', 'OH', 'SD', 
+                                           'SG'],
+                                           structure)
+    return coords
+
+
 def extract_residues_from_structure(structure: biotite.structure.AtomArray):
     """
     Args:
@@ -351,10 +379,13 @@ def get_mask_predict_point_mutations(uniprot_id, transcript_id, seq, seq_orig_le
         return point_mutation
 
 
-def get_coords_from_af2(af2_file):
+def get_coords_from_af2(af2_file, add_sidechain=False):
     pdb_path = af2_file
     structure = load_structure(pdb_path)
     af2_coords = extract_coords_from_structure(structure)
+    if add_sidechain:
+        af2_coords_sidechain = extract_sidechain_from_structure(structure)
+        af2_coords = np.concatenate([af2_coords, af2_coords_sidechain], axis=1)
     return af2_coords
 
 
@@ -363,6 +394,29 @@ def get_plddt_from_af2(af2_file):
     pdb_file = pdb_file.df['ATOM'].drop_duplicates(subset=['residue_number'])
     plddt = pdb_file['b_factor'].values
     return plddt
+
+
+def get_dssp_from_af2(af2_file):
+    p = PDBParser()
+    with gzip.open(af2_file, 'rt') as f:
+        structure = p.get_structure('', f)
+    model = structure[0]
+    # try:
+    #     dssp = DSSP(model, af2_file, file_type="PDB", dssp="/usr/bin/dssp")
+    # except Exception or UserWarning:
+    random.seed(hash(af2_file))
+    tmpfile = '/share/descartes/Users/gz2294/tmp/'+ ''.join(random.choices(string.ascii_letters, k=5)) + '.pdb'
+    with open(tmpfile, 'w') as f:
+        f.write(gzip.open(af2_file, 'rt').read())
+    dssp = DSSP(model, tmpfile, file_type="PDB", dssp="/share/descartes/Users/gz2294/miniconda3/bin/mkdssp")
+    os.remove(tmpfile)
+    # keys in dssp: index, aa, secondary struc, rsa, phi, psi, N-H-->O, O-->H-N, N-H-->O, O-->H-N
+    dssp = pd.DataFrame(dssp)
+    sec_struc = np.eye(len(DSSP_DICT), dtype=np.float32)[[DSSP_DICT.index(i) for i in dssp.iloc[:, 2].values]]
+    return np.concatenate([sec_struc, 
+                           dssp.iloc[:, 3].values[:, None], 
+                           dssp.iloc[:, 4].values[:, None] / 180 * np.pi, 
+                           dssp.iloc[:, 5].values[:, None] / 180 * np.pi], axis=1)
 
 
 def get_knn_graphs_from_af2(af2_coords, radius=None, max_neighbors=None, loop=False, gpu_id=None):
@@ -444,7 +498,7 @@ def get_embedding_from_esm2(protein, check_mode=True, seq_start=None, seq_end=No
 
 def get_embedding_from_esm1b(protein, check_mode=True, seq_start=None, seq_end=None):
     if isinstance(protein, str):
-        file_path = f"/share/vault/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm1b.embedding.uniprotIDs/{protein}.representations.layer.48.npy"
+        file_path = f"/share/ark/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm1b.embedding.uniprotIDs/{protein}.representations.layer.48.npy"
         if os.path.exists(file_path):
             if check_mode:
                 return True
@@ -531,7 +585,7 @@ def get_embedding_from_onehot_nonzero(seq, seq_start=None, seq_end=None, return_
         else:
             return batch_tokens
 
-
+# TODO: conservation should only from 1:21, not 1:41
 def get_conservation_from_msa(mutation: Mutation, check_mode=False):
     transcript = mutation.transcript_id
     seq = mutation.seq
@@ -563,6 +617,68 @@ def get_conservation_from_msa(mutation: Mutation, check_mode=False):
     if mutation.crop:
         conservation = conservation[mutation.seq_start -1:mutation.seq_end]
     return conservation
+
+
+def get_msa_dict_from_transcript_archive(transcript):
+    msa_alphabet = np.array(list('ACDEFGHIKLMNPQRSTVWYU'))
+    if pd.isna(transcript) or not os.path.exists(f'{MSA_DATA_PATH}/{transcript}.pickle'):
+        msa_seq = ''
+        conservation = np.zeros([0, 20])
+        msa = np.zeros([0, 200])
+    else:
+        with open(os.path.join(MSA_DATA_PATH, transcript + '.pickle'), 'rb') as file:
+            msa_mat = pickle.load(file)
+        msa_seq = ''.join(msa_alphabet[msa_mat[:, 0].astype(int)])
+        conservation = msa_mat[:, 1:21]
+        msa = msa_mat[:, 21:221]
+    return msa_seq, conservation, msa
+
+
+def get_msa_dict_from_transcript(uniprotID):
+    msa_alphabet = np.array(list('ACDEFGHIKLMNPQRSTVWYU'))
+    if pd.isna(uniprotID) or not os.path.exists(f'{MSA_DATA_PATH}/{uniprotID}_MSA.npy'):
+        msa_seq = ''
+        conservation = np.zeros([0, 20])
+        msa = np.zeros([0, 199])
+    else:
+        msa_mat = np.load(f'{MSA_DATA_PATH}/{uniprotID}_MSA.npy')
+        msa_seq = ''.join(msa_alphabet[msa_mat[:, 0].astype(int)])
+        conservation = np.eye(21)[msa_mat.astype(int)].mean(axis=1)[:, :20]
+        msa = msa_mat
+    return msa_seq, conservation, msa
+
+
+def get_msa(mutation: Mutation, check_mode=False):
+    transcript = mutation.transcript_id
+    seq = mutation.seq
+    seq_start = mutation.seq_start_orig
+    seq_end = mutation.seq_end_orig
+    if seq_start is None:
+        seq_start = 1
+    if seq_end is None:
+        seq_end = len(seq)
+    msa_alphabet = np.array(list('ACDEFGHIKLMNPQRSTVWYU'))
+    if not os.path.exists(f'{MSA_DATA_PATH}/{transcript}.pickle'):
+        matched_line = False
+    else:
+        with open(os.path.join(MSA_DATA_PATH, transcript + '.pickle'), 'rb') as file:
+            msa_mat = pickle.load(file)
+        msa_seq = ''.join(msa_alphabet[msa_mat[seq_start - 1:seq_end, 0].astype(int)])
+        if mutation.crop:
+            msa_seq = msa_seq[mutation.seq_start -1:mutation.seq_end]
+        matched_line = msa_seq == seq
+    if matched_line:
+        if check_mode:
+            return True
+        # 1:20 is conservation from hhblits, 1:21 is conservation from compara
+        msa = msa_mat[seq_start - 1:seq_end, 21:221]
+    else:
+        if check_mode:
+            return False
+        msa = np.zeros([seq_end - seq_start + 1, 200])
+    if mutation.crop:
+        msa = msa[mutation.seq_start -1:mutation.seq_end]
+    return msa
 
 
 def get_logits_from_esm2(protein, check_mode=True, seq_start=None, seq_end=None):
@@ -643,11 +759,11 @@ def get_contacts_from_msa(mutation: Mutation, check_mode=False):
     seq_end = mutation.seq_end
     msa_alphabet = np.array(list('ACDEFGHIKLMNPQRSTVWYU'))
     if pd.isna(transcript) \
-            or not os.path.exists(f'{MSA_DATA_PATH}/{transcript}.pickle') \
-            or not os.path.exists(f'{MSA_ATTN_DATA_PATH}/{transcript}.row_attentions.pt'):
+            or not os.path.exists(f'{MSA_DATA_PATH_ARCHIVE}/{transcript}.pickle') \
+            or not os.path.exists(f'{MSA_ATTN_DATA_PATH}/{transcript}.contacts.pt'):
         matched_line = False
     else:
-        with open(os.path.join(MSA_DATA_PATH, transcript + '.pickle'), 'rb') as file:
+        with open(os.path.join(MSA_DATA_PATH_ARCHIVE, transcript + '.pickle'), 'rb') as file:
             msa_mat = pickle.load(file)
         if seq_start is None:
             seq_start = 1
