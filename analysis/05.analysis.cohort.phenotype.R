@@ -7,20 +7,20 @@ cohorts <- c("CHD", "ASD", "NDD")
 good.pfams <- c("IonChannel.notest", "IonChannel.notest", "IonChannel.notest", "IonChannel.notest",
                 "O00555", "Q99250", 
                 "PF00130", 
-                "P15056",
-                "PF07679"
+                "P15056"
+                # "PF07679"
                 # "Epi.SCN2A"
 )
 pretrain.file.name <- c(rep('IonChannel', 6),
-                        rep('PF00130', 2),
-                        "PF07679"
+                        rep('PF00130', 2)
+                        # "PF07679"
                         # "Epi.SCN2A"
 )
 gene.names <- c("O00555", "Q99250", "P35498", "Q9UQD0",
                 "O00555", "Q99250", 
                 "P15056", 
-                "P15056",
-                "P22607"
+                "P15056"
+                # "P22607"
                 # "Q99250"
 )
 
@@ -39,14 +39,16 @@ source('~/Pipeline/annotate.var.class.R')
 source('~/Pipeline/bind_rows.R')
 phenotype_data <- annotate.var.class(phenotype_data)
 phenotype_data <- annotate.Dmis(phenotype_data, "REVEL", 0.5)
-ALL <- read.csv('/share/terra/Users/gz2294/Data/DMS/Itan.CKB.Cancer/ALL.csv', row.names = 1)
-ALL$unique.id <- paste(ALL$uniprotID, ALL$ref, ALL$pos.orig, ALL$alt, sep = ":")
+# ALL <- read.csv('/share/terra/Users/gz2294/Data/DMS/Itan.CKB.Cancer/ALL.csv', row.names = 1)
 ion.channel <- read.csv('/share/terra/Users/gz2294/Data/DMS/Ion_Channel/all.af2update.heyne.csv', row.names = 1)
 ion.channel$unique.id <- paste(ion.channel$uniprotID, ion.channel$ref, ion.channel$pos.orig, ion.channel$alt, sep = ":")
-to.del <- readRDS("/share/terra/Users/gz2294/Data/DMS/Itan.CKB.Cancer/to.del.conflict.with.chps.RDS")
-ALL <- ALL[!ALL$unique.id %in% to.del,]
-ALL <- ALL[!ALL$unique.id %in% ion.channel$unique.id,]
-heyne <- dplyr::bind_rows(ALL, ion.channel)
+# to.del <- readRDS("/share/terra/Users/gz2294/Data/DMS/Itan.CKB.Cancer/to.del.conflict.with.chps.RDS")
+# ALL <- ALL[!ALL$unique.id %in% to.del,]
+# ALL <- ALL[!ALL$unique.id %in% ion.channel$unique.id,]
+# heyne <- dplyr::bind_rows(ALL, ion.channel)
+ALL <- read.csv('figs/ALL.csv', row.names = 1)
+ALL$unique.id <- paste(ALL$uniprotID, ALL$ref, ALL$pos.orig, ALL$alt, sep = ":")
+heyne <- ALL
 
 for (i in 1:length(good.pfams)) {   
   pfam <- good.pfams[i]
@@ -102,7 +104,7 @@ for (i in 1:length(good.pfams)) {
   if (dim(pfam.data.gene)[1] != 0) {
     pfam.data.gene$vclass <- "mis"
   }
-  pfam.data.gene <- my.bind.rows(pfam.data.gene, pfam.data.gene.LGD)
+  # pfam.data.gene <- my.bind.rows(pfam.data.gene, pfam.data.gene.LGD)
   pfam.data.gene <- pfam.data.gene[!is.na(pfam.data.gene$HPO),]
   # remove patients if they have other damaging de novo variants
   to.drop <- c()
@@ -129,7 +131,7 @@ for (i in 1:length(good.pfams)) {
   source('~/Pipeline/plot.genes.by.group.pca.R')
   heyne$unique.id <- paste0(heyne$uniprotID, ":", heyne$aaChg)
   pfam.data.gene$unique.id <- paste0(pfam.data.gene$uniprotID, ":", pfam.data.gene$aaChg)
-  pfam.data.gene$in.heyne <- pfam.data.gene$uniprotID %in% heyne$uniprotID & pfam.data.gene$aaChg %in% heyne$aaChg
+  pfam.data.gene$in.heyne <- pfam.data.gene$uniprotID %in% heyne$uniprotID & pfam.data.gene$unique.id %in% heyne$unique.id
   pfam.data.gene$heyne.label <- heyne$score[match(pfam.data.gene$unique.id, heyne$unique.id)]
   pfam.data.gene$heyne.label[pfam.data.gene$heyne.label==1 & !is.na(pfam.data.gene$heyne.label)] <- "GoF"
   pfam.data.gene$heyne.label[pfam.data.gene$heyne.label==0 & !is.na(pfam.data.gene$heyne.label)] <- "LoF"
@@ -182,6 +184,7 @@ for (i in 1:length(good.pfams)) {
                          pheno.matrix.anno, 
                          font.size = 1.5,
                          color.group = 'meta.logits',
+                         mid=0.8,
                          text.group = 'aaChg',
                          i=1, plot.loading = T, )
   p2 <- plot.complex.pca(pheno.matrix[,colSums(pheno.matrix)>=3 & (dim(pheno.matrix)[1]-colSums(pheno.matrix))>=3],

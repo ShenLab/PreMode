@@ -27,11 +27,12 @@ p <- ggplot(gene.variants, aes(x=pos.variant.counts, y=neg.variant.counts)) +
 p
 
 # add EVE score
-source('/share/pascal/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
+source('/share/vault/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
 CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'EVE')
 CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'dbnsfp')
 CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'gMVP')
 CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'conservation')
+CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'AlphaMissense')
 
 source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
 auc.list <- list()
@@ -67,9 +68,12 @@ for (k in 1:dim(esm.logits)[1]) {
 CHPs.test$esm.logits <- score
 auc.list[[6]] <- plot.AUC(CHPs.test$score, CHPs.test$esm.logits)
 
-auc.list[[7]] <-conservation.auc <- plot.AUC(CHPs.test$score, CHPs.test$conservation)
+auc.list[[7]] <-conservation.auc <- plot.AUC(CHPs.test$score, CHPs.test$conservation.entropy)
 
-model.names <- c("PreMode", "EVE", "REVEL", "PrimateAI", "gMVP", "ESM", "conservation")
+auc.list[[8]] <- plot.AUC(CHPs.test$score, CHPs.test$AlphaMissense)
+# plot.AUC(CHPs.test$score[!is.na(CHPs.test$AlphaMissense)], CHPs.test$y.0[!is.na(CHPs.test$AlphaMissense)])
+
+model.names <- c("PreMode", "EVE", "REVEL", "PrimateAI", "gMVP", "ESM", "conservation", "AlphaMissense")
 to.plot <- data.frame()
 model.rank <- c()
 model.name <- c()
@@ -97,7 +101,8 @@ pr.list[[3]] <- plot.PR(CHPs.test$score, CHPs.test$REVEL)
 pr.list[[4]] <- plot.PR(CHPs.test$score, CHPs.test$PrimateAI)
 pr.list[[5]] <- plot.PR(CHPs.test$score, CHPs.test$gMVP)
 pr.list[[6]] <- plot.PR(CHPs.test$score, CHPs.test$esm.logits)
-pr.list[[7]] <- plot.PR(CHPs.test$score, CHPs.test$conservation)
+pr.list[[7]] <- plot.PR(CHPs.test$score, CHPs.test$conservation.entropy)
+pr.list[[8]] <- plot.PR(CHPs.test$score, CHPs.test$AlphaMissense)
 to.plot <- data.frame()
 model.rank <- c()
 model.name <- c()

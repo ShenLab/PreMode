@@ -1,8 +1,8 @@
 ## data set specific
 dataset: GraphMutationDataset
-data_file_train: /share/terra/Users/gz2294/ld1/Data/DMS/BLAT_ECOLX_Tenaillon2013-singles-MIC_score/train.seed.4.csv
-data_file_train_ddp_prefix: /share/terra/Users/gz2294/ld1/Data/DMS/BLAT_ECOLX_Tenaillon2013-singles-MIC_score/training
-data_file_test: /share/terra/Users/gz2294/ld1/Data/DMS/BLAT_ECOLX_Tenaillon2013-singles-MIC_score/test.seed.4.csv
+data_file_train: /share/pascal/Users/gz2294/Data/DMS/BLAT_ECOLX_Tenaillon2013-singles-MIC_score/train.seed.4.csv
+data_file_train_ddp_prefix: /share/pascal/Users/gz2294/Data/DMS/BLAT_ECOLX_Tenaillon2013-singles-MIC_score/training
+data_file_test: /share/pascal/Users/gz2294/Data/DMS/BLAT_ECOLX_Tenaillon2013-singles-MIC_score/test.seed.4.csv
 data_type: BLAT_ECOLX_Tenaillon2013-singles-MIC_score
 loop: true # add self loop or not
 node_embedding_type: one-hot # esm, one-hot, one-hot-idx, or aa-5dim
@@ -81,5 +81,5 @@ val_size: 0.05
 ## log specific
 num_save_epochs: 1
 num_save_batches: 100 # save every 1000 batches, this also control the validation frequency
-log_dir: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/TL.BLAT_ECOLX_Tenaillon2013-singles-MIC_score.seed.0.fold.4/
+log_dir: /share/pascal/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/TL.BLAT_ECOLX_Tenaillon2013-singles-MIC_score.seed.0.fold.4/
 

@@ -2,9 +2,8 @@
 # $1 is the name of the scripts folder
 # pretrain.seed.0.yaml: main file, the pretrain model
 # first select the best model for TL based on validation dataset in pretrain
-cd /share/terra/Users/gz2294/PreMode.final
 # prepare yaml files for subset tasks
-for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 VKORC1 IonChannel.chps.even.uniprotID
+for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 VKORC1 IonChannel.chps.even.uniprotID SNCA CYP2C9 GCK ASPA fluorescence
 do
   mkdir $1/$gene.subsets/
   for subset in 1 2 4 6

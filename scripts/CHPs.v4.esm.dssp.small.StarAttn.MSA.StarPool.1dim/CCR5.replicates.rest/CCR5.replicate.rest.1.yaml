@@ -21,7 +21,7 @@ max_len: 251
 radius: 50 # radius for KNN graph, larger than curoff_upper
 
 ## model specific
-load_model: /share/ark/Users/gz2294/PreMode.final/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/model.step.30000.pt
+load_model: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/model.step.30000.pt
 model_class: PreMode_Star_CON
 model: equivariant-transformer-star2-softmax
 neighbor_embedding: true

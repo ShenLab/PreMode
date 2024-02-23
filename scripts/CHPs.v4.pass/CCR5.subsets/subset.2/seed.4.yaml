@@ -1,8 +1,8 @@
 ## data set specific
 dataset: GraphMutationDataset
-data_file_train: /share/terra/Users/gz2294/ld1/Data/DMS/MAVEDB/CCR5.2.seed.4/training.csv
-data_file_train_ddp_prefix: /share/terra/Users/gz2294/ld1/Data/DMS/MAVEDB/CCR5/training
-data_file_test: /share/terra/Users/gz2294/ld1/Data/DMS/MAVEDB/CCR5/testing.csv
+data_file_train: /share/vault/Users/gz2294/Data/DMS/MAVEDB/CCR5.2.seed.4/training.csv
+data_file_train_ddp_prefix: /share/vault/Users/gz2294/Data/DMS/MAVEDB/CCR5/training
+data_file_test: /share/vault/Users/gz2294/Data/DMS/MAVEDB/CCR5/testing.csv
 data_type: CCR5
 loop: true # add self loop or not
 node_embedding_type: esm # esm, one-hot, one-hot-idx, or aa-5dim
@@ -21,7 +21,7 @@ max_len: 251
 radius: 50 # radius for KNN graph, larger than curoff_upper
 
 ## model specific
-load_model: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.pass.seed.0/model.step.58000.pt
+load_model: /share/pascal/Users/gz2294/PreMode.final/CHPs.v4.pass.seed.0/model.step.88000.pt
 model_class: PreMode_Star_CON
 model: pass-forward
 neighbor_embedding: true
@@ -45,7 +45,7 @@ num_nodes: 1
 num_rbf: 32 # number of radial basis functions, use a small size for quicker training
 rbf_type: expnormunlim
 trainable_rbf: true
-num_workers: 10
+num_workers: 0
 output_model: EquivariantRegressionScalar
 reduce_op: mean
 output_dim: 3
@@ -62,7 +62,7 @@ lr_factor: 0.8 # important
 weight_decay: 0.0
 lr_min: 1.0e-07 # important
 lr_patience: 2 # important
-num_steps_update: 8 # important, how many steps before updating the model, use large number for large batch size
+num_steps_update: 1 # important, how many steps before updating the model, use large number for large batch size
 lr_warmup_steps: 200 # important
 batch_size: 8
 ngpus: 1
@@ -81,5 +81,8 @@ val_size: 0.05
 ## log specific
 num_save_epochs: 1
 num_save_batches: 400 # save every 1000 batches, this also control the validation frequency
-log_dir: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.pass.seed.0/TL.CCR5.subset.2.seed.4/
+log_dir: /share/pascal/Users/gz2294/PreMode.final/CHPs.v4.pass.seed.0/TL.CCR5.subset.2.seed.4/
 
+loaded_confidence: true
+loaded_esm: true
+convert_to_onesite: true

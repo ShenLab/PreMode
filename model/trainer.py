@@ -1,8 +1,9 @@
 import json
 import os
+from types import SimpleNamespace as sn
 import time
 from os.path import join
-
+import copy
 import numpy as np
 import pandas as pd
 import torch
@@ -14,14 +15,16 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Subset
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader as TorchDataLoader
 import loralib as lora
-
+import gpytorch
 import data
 import utils.configs
 from model.module.utils import loss_fn_mapping
-
-torch.multiprocessing.set_sharing_strategy('file_system')
-
+import data
+from model.model import create_model, create_model_and_load
+from torch import _dynamo
+_dynamo.config.suppress_errors = True
 
 class PreMode_trainer(object):
     """
@@ -30,14 +33,18 @@ class PreMode_trainer(object):
 
     def __init__(self, hparams, model, stage: str = "train", dataset=None, device_id=None):
         super(PreMode_trainer, self).__init__()
-
+        if isinstance(hparams, dict):
+            hparams = sn(**hparams)
         self.hparams = hparams
 
-        # Don't load model, just store the model from input.
-        self.model = model
         # save the ddp_rank to write the log
         self.device_id = device_id
-        self.device = f"cuda:{device_id}" if device_id is not None else "cpu"
+        if device_id is not None and torch.cuda.is_available():
+            self.device = f"cuda:{device_id}"
+        else:
+            self.device = "cpu"
+        # Don't load model, just store the model from input.
+        self.model = model.to(self.device)
 
         # initialize dataloaders
         self.dataset = dataset
@@ -49,9 +56,14 @@ class PreMode_trainer(object):
         self.test_dataloader = None
         self.split_fn = self.hparams.data_split_fn
         self.setup_dataloaders(stage, self.split_fn)
+        print(f'Finished setting dataloaders for rank {self.device_id}')
         if self.train_dataloader is not None:
             self.batchs_per_epoch = len(self.train_dataloader)
-        self.reset_train_dataloader_each_epoch = self.hparams.reset_train_dataloader_each_epoch
+            self.num_data = len(self.train_dataloader.dataset)
+        else:
+            self.batchs_per_epoch = 0
+            self.num_data = len(self.test_dataloader.dataset)
+        self.reset_train_dataloader_each_epoch = self.hparams.reset_train_dataloader_each_epoch and hparams.data_split_fn != "_by_anno"
         self.reset_train_dataloader_each_epoch_seed = self.hparams.reset_train_dataloader_each_epoch_seed
         self.train_iterator = None
         self.val_iterator = None
@@ -102,6 +114,11 @@ class PreMode_trainer(object):
             #         self.model.module.output_model.output_network[0].weight[1].copy_(self.model.module.output_model.output_network[0].weight[2])
             #     else:
             #         self.model.output_model.output_network[0].weight[1].copy_(self.model.output_model.output_network[0].weight[2])
+        elif self.hparams.loss_fn == "GP_loss":
+                self.loss_fn = gpytorch.mlls.VariationalELBO(self.model.output_model.likelihood, 
+                                                             self.model.output_model.output_network, 
+                                                             num_data=self.num_data)
+                self.hparams.y_weight = -1
         else:
             self.loss_fn = loss_fn_mapping[self.hparams.loss_fn]
             
@@ -130,10 +147,21 @@ class PreMode_trainer(object):
         if self.hparams.use_lora is not None:
             self.model.eval()
             lora.mark_only_lora_as_trainable(model)
-            if self.hparams.loss_fn == "weighted_combined_loss" or self.hparams.loss_fn == "combined_loss":
-                self.model.output_model.output_network.requires_grad_(True)
-            elif self.hparams.loss_fn == "weighted_loss":
-                self.model.output_model.requires_grad_(True)
+            # if model is DDP, we need to mark self.model.module:
+            if isinstance(self.model, DDP):
+                if self.hparams.loss_fn == "weighted_combined_loss" or self.hparams.loss_fn == "combined_loss":
+                    self.model.module.output_model.output_network.requires_grad_(True)
+                elif self.hparams.loss_fn == "weighted_loss":
+                    self.model.module.output_model.requires_grad_(True)
+                elif self.hparams.model == "lora-esm":
+                    self.model.module.output_model.requires_grad_(True)
+            else:
+                if self.hparams.loss_fn == "weighted_combined_loss" or self.hparams.loss_fn == "combined_loss":
+                    self.model.output_model.output_network.requires_grad_(True)
+                elif self.hparams.loss_fn == "weighted_loss":
+                    self.model.output_model.requires_grad_(True)
+                elif self.hparams.model == "lora-esm":
+                    self.model.output_model.requires_grad_(True)
             self.use_lora = True
         else:
             self.use_lora = False
@@ -162,7 +190,8 @@ class PreMode_trainer(object):
         self.contrastive_loss = loss_fn_mapping[self.hparams.contrastive_loss_fn] if self.hparams.contrastive_loss_fn is not None else None
 
         # initialize summary writer
-        self.writer = SummaryWriter(log_dir=f'{self.hparams.log_dir}/log/')
+        if stage == "train":
+            self.writer = SummaryWriter(log_dir=f'{self.hparams.log_dir}/log/')
 
     def setup_dataloaders(self, stage: str = 'train', split_fn="_by_uniprot_id"):
         if self.dataset is None:
@@ -173,6 +202,10 @@ class PreMode_trainer(object):
                 max_neighbors=self.hparams.max_num_neighbors,
                 loop=self.hparams.loop,
             )
+        if self.hparams.dataset.startswith("FullGraph"):
+            data_loader_fn = TorchDataLoader
+        else:
+            data_loader_fn = DataLoader
         if stage == 'train':
             # make train/val split
             if self.hparams.val_size > 0:
@@ -185,46 +218,53 @@ class PreMode_trainer(object):
                     join(self.hparams.log_dir, f"splits.{self.device_id}.npz"),
                 )
                 print(f"train {len(idx_train)}, val {len(idx_val)}")
-
-                self.train_dataset = Subset(self.dataset, idx_train)
-                self.idx_train = idx_train
-                self.val_dataset = Subset(self.dataset, idx_val)
+                if split_fn == "_by_anno":
+                    self.val_dataset = copy.deepcopy(self.dataset).subset(idx_val)
+                    self.train_dataset = self.dataset.subset(idx_train)
+                else:
+                    self.val_dataset = Subset(self.dataset, idx_val)
+                    self.train_dataset = Subset(self.dataset, idx_train)
                 self.idx_val = idx_val
+                self.idx_train = idx_train
             else:
                 self.train_dataset = self.dataset
                 self.val_dataset = None
                 self.idx_train = np.arange(len(self.dataset))
                 self.idx_val = None
-
-            self.train_dataloader = DataLoader(
+            dataloader_args = {
+                "batch_size": self.hparams.batch_size,
+                "num_workers": min(20, self.hparams.num_workers),
+                "pin_memory": True,
+                "shuffle": split_fn=='_by_anno'
+                }
+            if self.hparams.num_workers == 0:
+                dataloader_args['pin_memory_device'] = 'cpu'
+            self.train_dataloader = data_loader_fn(
                 dataset=self.train_dataset,
-                batch_size=self.hparams.batch_size,
-                num_workers=0,
-                pin_memory=True,
-                pin_memory_device='cpu',
-                shuffle=False,
+                **dataloader_args,
             )
             if self.val_dataset is not None:
-                self.val_dataloader = DataLoader(
+                dataloader_args['shuffle'] = False
+                dataloader_args["num_workers"] = 0
+                dataloader_args["pin_memory"] = False
+                self.val_dataloader = data_loader_fn(
                     dataset=self.val_dataset,
-                    batch_size=self.hparams.batch_size,
-                    num_workers=0,
-                    pin_memory=True,
-                    pin_memory_device='cpu',
-                    shuffle=False,
+                    **dataloader_args,
                 )
             else:
                 self.val_dataloader = None
         elif stage == 'test':
             # only prepare test dataloader
             self.test_dataset = self.dataset
-            self.test_dataloader = DataLoader(
+            dataloader_args = {
+                "batch_size": self.hparams.batch_size,
+                "num_workers": 0,
+                "pin_memory": False,
+                "shuffle": False
+                }
+            self.test_dataloader = data_loader_fn(
                 dataset=self.test_dataset,
-                batch_size=self.hparams.batch_size,
-                num_workers=0,
-                pin_memory=True,
-                pin_memory_device='cpu',
-                shuffle=False,
+                **dataloader_args,
             )
         elif stage == 'all':
             # make train/test/val split
@@ -239,15 +279,15 @@ class PreMode_trainer(object):
                 self.hparams.splits,
             )
             print(f"train {len(idx_train)}, val {len(idx_val)}, test {len(idx_test)}")
-
-            self.train_dataset = Subset(self.dataset, idx_train)
-            self.idx_train = idx_train
-            self.val_dataset = Subset(self.dataset, idx_val)
+            
+            self.val_dataset = copy.deepcopy(self.dataset).subset(idx_val)
             self.idx_val = idx_val
-            self.test_dataset = Subset(self.dataset, idx_test)
+            self.test_dataset = copy.deepcopy(self.dataset).subset(idx_test)
             self.idx_test = idx_test
+            self.train_dataset = self.dataset.subset(idx_train)
+            self.idx_train = idx_train
 
-            self.train_dataloader = DataLoader(
+            self.train_dataloader = data_loader_fn(
                 dataset=self.train_dataset,
                 batch_size=self.hparams.batch_size,
                 num_workers=0,
@@ -255,7 +295,7 @@ class PreMode_trainer(object):
                 pin_memory_device='cpu',
                 shuffle=False,
             )
-            self.val_dataloader = DataLoader(
+            self.val_dataloader = data_loader_fn(
                 dataset=self.val_dataset,
                 batch_size=self.hparams.batch_size,
                 num_workers=0,
@@ -263,7 +303,7 @@ class PreMode_trainer(object):
                 pin_memory_device='cpu',
                 shuffle=False,
             )
-            self.test_dataloader = DataLoader(
+            self.test_dataloader = data_loader_fn(
                 dataset=self.test_dataset,
                 batch_size=self.hparams.batch_size,
                 num_workers=0,
@@ -275,8 +315,9 @@ class PreMode_trainer(object):
             raise ValueError(f"stage {stage} not supported")
 
     def configure_optimizers(self):
+        # only include parameters that require gradients
         self.optimizer = AdamW(
-            self.model.parameters(),
+            filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=float(self.hparams.lr),
             weight_decay=self.hparams.weight_decay,
         )
@@ -327,7 +368,6 @@ class PreMode_trainer(object):
         # print("Parameters without gradients:")
         # for param_name in parameters_without_grad:
         #     print(param_name)
-        # import ipdb; ipdb.set_trace()
         self.updated = False
         self.global_step += 1  # update global step
         return loss
@@ -354,7 +394,11 @@ class PreMode_trainer(object):
 
     def step(self, batch, stage):
         with torch.set_grad_enabled(stage == "train"):
-            extra_args = batch.to_dict()
+            if isinstance(batch, dict):
+                extra_args = copy.deepcopy(batch)
+                batch = sn(**batch)
+            else:
+                extra_args = batch.to_dict()
             # extra_args actually won't be used in the model
             for a in ('y', 'x', 'x_mask', 'x_alt', 'pos', 'batch',
                       'edge_index', 'edge_attr',
@@ -363,16 +407,16 @@ class PreMode_trainer(object):
                 if a in extra_args:
                     del extra_args[a]
             y, x_embed, attn_weight_layers = self.forward(
-                x=batch.x.to(self.device),
-                x_mask=batch.x_mask.to(self.device),
-                x_alt=batch.x_alt.to(self.device),
-                pos=batch.pos.to(self.device),
-                batch=batch.batch.to(self.device) if "batch" in batch else None,
-                edge_index=batch.edge_index.to(self.device) if batch.edge_index is not None else None,
-                edge_index_star=batch.edge_index_star.to(self.device) if "edge_index_star" in batch else None,
-                edge_attr=batch.edge_attr.to(self.device) if batch.edge_attr is not None else None,
-                edge_attr_star=batch.edge_attr_star.to(self.device) if "edge_attr_star" in batch else None,
-                node_vec_attr=batch.node_vec_attr.to(self.device),
+                x=batch.x.to(self.device, non_blocking=True),
+                x_mask=batch.x_mask.to(self.device, non_blocking=True),
+                x_alt=batch.x_alt.to(self.device, non_blocking=True),
+                pos=batch.pos.to(self.device, non_blocking=True) if hasattr(batch, "pos") and batch.pos is not None else None,
+                batch=batch.batch.to(self.device, non_blocking=True) if hasattr(batch, "batch") and batch.batch is not None else None,
+                edge_index=batch.edge_index.to(self.device, non_blocking=True) if hasattr(batch, "edge_index") and batch.edge_index is not None else None,
+                edge_index_star=batch.edge_index_star.to(self.device, non_blocking=True) if hasattr(batch, "edge_index_star") and batch.edge_index_star is not None else None,
+                edge_attr=batch.edge_attr.to(self.device, non_blocking=True) if hasattr(batch, "edge_attr") and batch.edge_attr is not None else None,
+                edge_attr_star=batch.edge_attr_star.to(self.device, non_blocking=True) if hasattr(batch, "edge_attr_star") and batch.edge_attr_star is not None else None,
+                node_vec_attr=batch.node_vec_attr.to(self.device, non_blocking=True) if hasattr(batch, "node_vec_attr") and batch.node_vec_attr is not None else None,
                 extra_args=extra_args,
                 return_attn=stage == "interpret",
             )
@@ -385,7 +429,7 @@ class PreMode_trainer(object):
         loss_y = 0
         
         if stage != "interpret":
-            if "y" in batch:
+            if hasattr(batch, 'y'):
                 if batch.y.ndim == 1 and self.hparams.loss_fn != "cross_entropy":
                     batch.y = batch.y.unsqueeze(1)
 
@@ -393,22 +437,33 @@ class PreMode_trainer(object):
                 if self.hparams.dataset.startswith("Mask"):
                     y = y[batch.x_mask==False]
                     batch.y = batch.y[batch.x_mask==False]
-                loss_y = self.loss_fn(y, batch.y.to(self.device))
-                
+                if self.hparams.loss_fn == "GP_loss":
+                    batch.y = (batch.y + 1) / 2
+                if hasattr(batch, 'score_mask'):
+                    loss_y = self.loss_fn(input=y, 
+                                          target=batch.y.to(self.device, non_blocking=True), 
+                                          weight=batch.score_mask.to(self.device, non_blocking=True)) + y * 0
+                else:
+                    loss_y = self.loss_fn(y, batch.y.to(self.device, non_blocking=True))
+                if loss_y.ndim > 0:
+                    loss_y = loss_y.mean()
                 if self.contrastive_loss is not None:
                     loss_cont = self.contrastive_loss(x_embed, batch.y.to(self.device))
                 else:
                     loss_cont = 0
 
-                if self.hparams.y_weight > 0 and stage != "interpret":
-                    self.losses[stage + "_y"].append(loss_y.detach().cpu())
+                if self.hparams.y_weight != 0 and stage != "interpret":
+                    self.losses[stage + "_y"].append(loss_y.detach().cpu() * self.hparams.y_weight)
 
             # total loss
             loss = loss_y * self.hparams.y_weight + loss_cont
             self.losses[stage].append(loss.detach().cpu())
             return loss
         else:
-            return None, y, x_embed, attn_weight_layers
+            if self.hparams.loss_fn == "GP_loss":
+                return self.model.output_model.likelihood(y).variance, self.model.output_model.likelihood(y).mean, x_embed, attn_weight_layers
+            else:
+                return None, y, x_embed, attn_weight_layers
 
     def optimizer_step(self, loss=None):
         # optimizer = kwargs["optimizer"] if "optimizer" in kwargs else args[2]
@@ -430,6 +485,8 @@ class PreMode_trainer(object):
 
     def training_epoch_begin(self):
         self.train_iterator = iter(self.train_dataloader)
+        # set model to train mode
+        self.model.train()
 
     def training_epoch_end(self):
         self.train_iterator = None
@@ -440,13 +497,17 @@ class PreMode_trainer(object):
                                                                                    self.dataset,
                                                                                    seed=self.current_epoch if self.reset_train_dataloader_each_epoch_seed else None)
             self.train_dataset = Subset(self.dataset, idx_train)
+            dataloader_args = {
+                "batch_size": self.hparams.batch_size,
+                "num_workers": min(1, self.hparams.num_workers),
+                "pin_memory": True,
+                "shuffle": False
+                }
+            if self.hparams.num_workers == 0:
+                dataloader_args['pin_memory_device'] = 'cpu'
             self.train_dataloader = DataLoader(
                     dataset=self.train_dataset,
-                    batch_size=self.hparams.batch_size,
-                    num_workers=self.hparams.num_workers,
-                    pin_memory=True,
-                    pin_memory_device='cpu',
-                    shuffle=False,
+                    **dataloader_args,
                 )
 
     def validation_epoch_begin(self):
@@ -454,6 +515,8 @@ class PreMode_trainer(object):
             self.val_iterator = iter(self.train_dataloader)
         else:
             self.val_iterator = iter(self.val_dataloader)
+        # set model to eval mode
+        self.model.eval()
 
     def validation_epoch_end(self, reset_train_loss=False):
         self.val_iterator = None
@@ -464,8 +527,8 @@ class PreMode_trainer(object):
             "train_loss": torch.stack(self.losses["train"]).mean().item() if len(self.losses["train"]) > 0 else None,
         }
         if self.val_dataset is not None:
-            result_dict["val_loss"] = torch.stack(self.losses["val"]).mean().item()
-            self.write_loss_log("val", torch.stack(self.losses["val"]).mean())
+            result_dict["val_loss"] = torch.stack(self.losses["val"]).mean().item() if len(self.losses["val"]) > 0 else 0
+            self.write_loss_log("val", result_dict["val_loss"])
         else:
             # use train loss as val loss if no val dataset is present
             result_dict["val_loss"] = torch.stack(self.losses["train"]).mean().item()
@@ -478,7 +541,7 @@ class PreMode_trainer(object):
         if len(self.losses["train_y"]) > 0:
             result_dict["train_loss_y"] = torch.stack(self.losses["train_y"]).mean().item()
             if self.val_dataset is not None:
-                result_dict["val_loss_y"] = torch.stack(self.losses["val_y"]).mean().item()
+                result_dict["val_loss_y"] = torch.stack(self.losses["val_y"]).mean().item() if len(self.losses["val_y"]) > 0 else 0
 
             if len(self.losses["test"]) > 0:
                 result_dict["test_loss_y"] = torch.stack(
@@ -488,10 +551,14 @@ class PreMode_trainer(object):
             self._reset_losses_dict()
         else:
             self._reset_val_losses_dict()
+        # set model back to train mode
+        self.model.train()
         return result_dict
 
     def testing_epoch_begin(self):
         self.test_iterator = iter(self.test_dataloader)
+        # set model to eval mode
+        self.model.eval()
 
     def testing_epoch_end(self):
         self.test_iterator = None
@@ -519,6 +586,8 @@ class PreMode_trainer(object):
             axis=1
         )
         self._reset_predictions_dict()
+        # set model back to train mode
+        self.model.train()
         return result_dict, result_df
 
     def write_loss_log(self, stage, loss):
@@ -532,7 +601,9 @@ class PreMode_trainer(object):
                     tag = tag.replace('.', '/')
                     self.writer.add_histogram('weights/'+tag, value.data.cpu().numpy(), self.global_step)
                     try:
-                        self.writer.add_histogram('grads/'+tag, value.grad.data.cpu().numpy(), self.global_step)
+                        # only add gradients if they are not None
+                        if value.grad is not None:
+                            self.writer.add_histogram('grads/'+tag, value.grad.data.cpu().numpy(), self.global_step)
                     except:
                         print(f"failed to add grad histogram for '{tag}' in counter: {self.global_step}")
 
@@ -604,6 +675,9 @@ class PreMode_trainer(object):
         torch.save(self.scheduler.state_dict(), scheduler_save_file_name)
 
     def load_model(self, epoch=None, step=None, update_count=False):
+        # if epoch or step is 0, don't load model
+        if (epoch is not None and epoch == 0) or (step is not None and step == 0):
+            return
         if epoch is None:
             if step is None:
                 _state_dict = torch.load(
@@ -826,10 +900,14 @@ def data_distributed_parallel_gpu_archive(rank, model, hparams, datasets, traine
     return trainer
 
 
-def data_distributed_parallel_gpu(rank, model, hparams, datasets, trainer_fn=None, checkpoint_epoch=None):
+def data_distributed_parallel_gpu(rank, model, hparams, dataset_att, dataset_extra_args, trainer_fn=None, checkpoint_epoch=None):
     # set up training processes
     # Currently have bug if batch size does not match
     global result_dict
+    if isinstance(hparams, dict):
+        # If using hp_tune, then hparams is a dict
+        hparams = sn(**hparams)
+    torch.set_num_threads(6)
     world_size = hparams.ngpus
     epochs = hparams.num_epochs
     save_every_step = hparams.num_save_batches
@@ -837,12 +915,25 @@ def data_distributed_parallel_gpu(rank, model, hparams, datasets, trainer_fn=Non
     setup(rank, world_size)
     device = f'cuda:{rank}'
     torch.cuda.set_per_process_memory_fraction(1.0, rank)
-    model = model.to(device)
+    if hparams.dataset.startswith("FullGraph"):
+        model = torch.compile(model.to(device))
+        print(f'Compiled model in rank {rank}')
+    else:
+        model = model.to(device)
     
-    ddp_model = DDP(model, device_ids=[rank], output_device=rank)
+    ddp_model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=hparams.model.startswith("lora"))
     ddp_model.train()
     
-    trainer = trainer_fn(hparams=hparams, model=ddp_model, dataset=datasets[rank], device_id=rank)
+    # create dataset
+    print(f'Begin loading dataset in rank {rank}')
+    dataset = getattr(data, hparams.dataset)(
+            data_file=f"{hparams.data_file_train_ddp_prefix}.{rank}.csv",
+            gpu_id=rank,
+            **dataset_att,
+            **dataset_extra_args,
+        )
+    print(f'Loaded dataset in rank {rank}')
+    trainer = trainer_fn(hparams=hparams, model=ddp_model, dataset=dataset, device_id=rank)
     print(f"number of trainable parameters: {sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)}, " +
           f"percentage = {sum(p.numel() for p in trainer.model.parameters() if p.requires_grad) / sum(p.numel() for p in trainer.model.parameters())}")
     # dry run to update optimizer and scheduler to the checkpoint epoch
@@ -864,6 +955,7 @@ def data_distributed_parallel_gpu(rank, model, hparams, datasets, trainer_fn=Non
         print("No checkpoint epoch, start from scratch")
         checkpoint_epoch = 0
     # begin training
+    dist.barrier()
     with Join([trainer.model]):
         for i in range(checkpoint_epoch, epochs):
             epoch_start_time = time.time()
@@ -874,11 +966,11 @@ def data_distributed_parallel_gpu(rank, model, hparams, datasets, trainer_fn=Non
                     batch_start_time = time.time()
                     loss = trainer.training_step()
                     if trainer.global_step % hparams.num_steps_update == 0:
+                        dist.barrier()
                         # only update every num_steps_update steps, to save memory
                         trainer.optimizer_step(loss)
                     batch_end_time = time.time()
                     print(f"Rank {rank} batch {trainer.global_step} time: {batch_end_time - batch_start_time}")
-                    dist.barrier()
                     if trainer.global_step % save_every_step == 0:
                         if rank == 0:
                             trainer.write_model(step=trainer.global_step)
@@ -890,10 +982,10 @@ def data_distributed_parallel_gpu(rank, model, hparams, datasets, trainer_fn=Non
                             while not val_finished:
                                 try:
                                     trainer.validation_step()
-                                    dist.barrier()
                                 except StopIteration:
                                     val_finished = True
                             val_end_time = time.time()
+                        dist.barrier()
                         result_dict = trainer.validation_epoch_end(reset_train_loss=True)
                         print(f"Rank {rank} batch {trainer.global_step} result: {result_dict}")
                         with open(
@@ -951,16 +1043,29 @@ def data_distributed_parallel_gpu(rank, model, hparams, datasets, trainer_fn=Non
     return trainer
 
 
-def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint_epoch=None):
+def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint_epoch=None, trial_id=None):
     # set up training processes
     # Currently have bug if batch size does not match
-    global result_dict
+    if isinstance(hparams, dict):
+        # If using hp_tune, then hparams is a dict
+        hparams = sn(**hparams)
+    # if trial_id is not None, means we are in the hp_tune mode, we need to create subdirectory for this trial
+    if trial_id is not None:
+        print(f"Trial id: {trial_id}")
+        hparams.log_dir = f"{hparams.log_dir}/trial.{trial_id}"
+        os.makedirs(hparams.log_dir, exist_ok=True)
+    if hparams.hp_tune:
+        from ray.air import Checkpoint, session
     epochs = hparams.num_epochs
     save_every_step = hparams.num_save_batches
     save_every_epoch = hparams.num_save_epochs
     device = f'cuda:{rank}'
     torch.cuda.set_per_process_memory_fraction(1.0, rank)
-    model = model.to(device)
+    if hparams.dataset.startswith("FullGraph"):
+        model = torch.compile(model.to(device))
+        print(f'Compiled model in rank {rank}')
+    else:
+        model = model.to(device)
     model.train()
     
     trainer = trainer_fn(hparams=hparams, model=model, dataset=dataset, device_id=rank)
@@ -1013,6 +1118,20 @@ def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint
                     all_val_loss = result_dict["val_loss"]
                     print(f"Batch {trainer.global_step} all val loss: {all_val_loss}")
                     trainer.scheduler_step(all_val_loss)
+                    # if in the haparameter tuning mode, then save the model to the checkpoint directory
+                    if hparams.hp_tune:
+                        checkpoint_data = {
+                            "epoch": trainer.current_epoch,
+                            "batch": trainer.global_step,
+                            "net_state_dict": trainer.model.state_dict(),
+                            "optimizer_state_dict": trainer.optimizer.state_dict(),
+                            "scheduler_state_dict": trainer.scheduler.state_dict(),
+                        }
+                        checkpoint = Checkpoint.from_dict(checkpoint_data)
+                        session.report(
+                            {"loss": all_val_loss},
+                            checkpoint=checkpoint,
+                        )
                     val_end_time = time.time()
                     print(f"Rank {rank} batch {trainer.global_step} validation time: {val_end_time - val_start_time}")
             except StopIteration:
@@ -1033,9 +1152,40 @@ def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint
         with open(f"{hparams.log_dir}/result_dict.epoch.{i}.ddp_rank.{rank}.json", "w") as f:
             json.dump(result_dict, f)
         trainer.training_epoch_end()
+        # if in the haparameter tuning mode, then save the model to the checkpoint directory
+        all_val_loss = result_dict["val_loss"]
+        if hparams.hp_tune:
+            checkpoint_data = {
+                "epoch": trainer.current_epoch,
+                "batch": trainer.global_step,
+                "net_state_dict": trainer.model.state_dict(),
+                "optimizer_state_dict": trainer.optimizer.state_dict(),
+                "scheduler_state_dict": trainer.scheduler.state_dict(),
+            }
+            checkpoint = Checkpoint.from_dict(checkpoint_data)
+            session.report(
+                {"loss": all_val_loss},
+                checkpoint=checkpoint,
+            )
         epoch_end_time = time.time()
         print(f"Epoch {i} time: ", epoch_end_time - epoch_start_time)
         if trainer.current_epoch % save_every_epoch == 0:
             trainer.write_model(epoch=trainer.current_epoch, save_optimizer=True, optimizer_rank=rank)
     # return all_losses
     return trainer
+
+
+def ray_tune(config, dataset=None, trial_id=None):
+    args = sn(**config)
+    model_class = args.model_class
+    # initialize model
+    if args.load_model == "None" or args.load_model == "null" or args.load_model is None:
+        my_model = create_model(config, model_class=model_class)
+    else:
+        my_model = create_model_and_load(config, model_class=model_class)
+    if args.trainer_fn == "PreMode_trainer":
+        trainer_fn = PreMode_trainer
+    else:
+        raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
+    check_point_epoch = None
+    return single_thread_gpu(args.gpu_id, my_model, config, dataset, trainer_fn=trainer_fn, checkpoint_epoch=check_point_epoch, trial_id=trial_id)

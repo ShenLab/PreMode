@@ -1,0 +1,116 @@
+Compiled model in rank 2
+Begin loading dataset in rank 2
+read in 99 mutations from /share/pascal/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/training.head.2.csv
+found 81 unique wt sequences
+Compiled model in rank 0
+Begin loading dataset in rank 0
+read in 99 mutations from /share/pascal/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/training.head.0.csv
+found 80 unique wt sequences
+Compiled model in rank 1
+Begin loading dataset in rank 1
+read in 99 mutations from /share/pascal/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/training.head.1.csv
+found 93 unique wt sequences
+Compiled model in rank 3
+Begin loading dataset in rank 3
+read in 99 mutations from /share/pascal/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/training.head.3.csv
+found 87 unique wt sequences
+drop 0 mutations that do not have embedding or msa
+drop 0 mutations that do not have embedding or msa
+drop 0 mutations that do not have embedding or msa
+drop 0 mutations that do not have embedding or msa
+drop 0 mutations that don't have coordinates
+Finished loading 99 mutations
+drop 0 mutations that don't have coordinates
+Finished loading 99 mutations
+drop 0 mutations that don't have coordinates
+Finished loading 99 mutations
+drop 0 mutations that don't have coordinates
+Finished loading 99 mutations
+Finished loading 93 af2 coords
+Finished loading plddt
+Finished loading confidence
+Finished loading dssp
+Loaded dataset in rank 1
+train 94, val 5
+Finished setting dataloaders for rank 1
+set up weighted loss function with weight: tensor([0.8534, 1.2073, 0.0000, 0.0000], device='cuda:1')
+number of trainable parameters: 13870643, percentage = 0.020912483394814316
+No checkpoint epoch, start from scratch
+Finished loading 84 af2 coords
+Finished loading plddt
+Finished loading confidence
+Finished loading dssp
+Loaded dataset in rank 0
+train 94, val 5
+Finished setting dataloaders for rank 0
+set up weighted loss function with weight: tensor([1.1000, 0.9167, 0.0000, 0.0000], device='cuda:0')
+number of trainable parameters: 13870643, percentage = 0.020912483394814316
+No checkpoint epoch, start from scratch
+Finished loading 83 af2 coords
+Finished loading plddt
+Finished loading confidence
+Finished loading dssp
+Loaded dataset in rank 2
+train 94, val 5
+Finished setting dataloaders for rank 2
+set up weighted loss function with weight: tensor([1.0102, 0.9900, 0.0000, 0.0000], device='cuda:2')
+number of trainable parameters: 13870643, percentage = 0.020912483394814316
+No checkpoint epoch, start from scratch
+Finished loading 87 af2 coords
+Finished loading plddt
+Finished loading confidence
+Finished loading dssp
+Loaded dataset in rank 3
+train 94, val 5
+Finished setting dataloaders for rank 3
+set up weighted loss function with weight: tensor([0.9000, 1.1250, 0.0000, 0.0000], device='cuda:3')
+number of trainable parameters: 13870643, percentage = 0.020912483394814316
+No checkpoint epoch, start from scratch
+/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='mean' instead.
+  warnings.warn(warning.format(ret))
+/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='mean' instead.
+  warnings.warn(warning.format(ret))
+/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='mean' instead.
+  warnings.warn(warning.format(ret))
+/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='mean' instead.
+  warnings.warn(warning.format(ret))
+Rank 1 batch 1 time: 16.186548709869385
+Rank 2 batch 1 time: 14.879570007324219
+Rank 3 batch 1 time: 16.095266103744507
+Traceback (most recent call last):
+  File "/share/vault/Users/gz2294/PreMode/train.py", line 1228, in <module>
+    main(_args)
+  File "/share/vault/Users/gz2294/PreMode/train.py", line 334, in main
+    mp.spawn(data_distributed_parallel_gpu,
+  File "/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 239, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method='spawn')
+  File "/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 197, in start_processes
+    while not context.join():
+  File "/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 160, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 1 terminated with the following error:
+Traceback (most recent call last):
+  File "/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 69, in _wrap
+    fn(i, *args)
+  File "/share/vault/Users/gz2294/PreMode/model/trainer.py", line 965, in data_distributed_parallel_gpu
+    loss = trainer.training_step()
+  File "/share/vault/Users/gz2294/PreMode/model/trainer.py", line 361, in training_step
+    loss = self.step(batch, "train") / self.hparams.num_steps_update
+  File "/share/vault/Users/gz2294/PreMode/model/trainer.py", line 409, in step
+    y, x_embed, attn_weight_layers = self.forward(
+  File "/share/vault/Users/gz2294/PreMode/model/trainer.py", line 344, in forward
+    return self.model(x=x,
+  File "/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/site-packages/torch/nn/parallel/distributed.py", line 1139, in forward
+    if torch.is_grad_enabled() and self.reducer._rebuild_buckets():
+RuntimeError: Expected to have finished reduction in the prior iteration before starting a new one. This error indicates that your module has parameters that were not used in producing loss. You can enable unused parameter detection by passing the keyword argument `find_unused_parameters=True` to `torch.nn.parallel.DistributedDataParallel`, and by 
+making sure all `forward` function outputs participate in calculating loss. 
+If you already have done the above, then the distributed data parallel module wasn't able to locate the output tensors in the return value of your module's `forward` function. Please include the loss function and the structure of the return value of `forward` of your module when reporting this issue (e.g. list, dict, iterable).
+Parameter indices which did not receive grad for rank 1: 2 5 8 11 14 15 16 19 22 23 24 27 30 33 36 37 38 41 44 45 46 49 52 55 58 59 60 63 66 67 68 71 74 77 80 81 82 85 88 89 90 93 96 99 102 103 104 107 110 111 112 115 118 121 124 125 126 129 132 133 134 137 140 143 146 147 148 151 154 155 156 159 162 165 168 169 170 173 176 177 178 181 184 187 190 191 192 195 198 199 200 203 206 209 212 213 214 217 220 221 ...
+ In addition, you can set the environment variable TORCH_DISTRIBUTED_DEBUG to either INFO or DETAIL to print out information about which particular parameters did not receive gradient on this rank as part of this error
+
+/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/lib/python3.9/multiprocessing/resource_tracker.py:216: UserWarning: resource_tracker: There appear to be 11 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

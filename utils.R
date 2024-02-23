@@ -4,7 +4,7 @@ get.auc.by.epoch <- function(configs, base.line="uniprotID") {
   num_saved_batches <- floor(ceiling(data.train * configs$train_size / configs$ngpus / configs$batch_size)
                              * configs$num_epochs / configs$num_save_batches) + 1
   epochs <- c(1:(configs$num_epochs))
-  source('/share/terra/Users/gz2294/Pipeline/AUROC.R')
+  source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
   library(doParallel)
   cl <- makeCluster(72)
   registerDoParallel(cl)
@@ -114,7 +114,7 @@ get.auc.by.epoch <- function(configs, base.line="uniprotID") {
   if (base.line == "uniprotID") {
     baseline.uniprotID <- system(
       paste0("/share/vault/Users/gz2294/miniconda3/envs/r4-base/bin/python ",
-             "/share/terra/Users/gz2294/PreMode.final/analysis/random.forest.process.classifier.py ",
+             "/share/pascal/Users/gz2294/PreMode.final/analysis/random.forest.process.classifier.py ",
              configs$data_file_train, " ",
              configs$data_file_test), intern = T,
     )
@@ -134,7 +134,7 @@ get.auc.by.epoch <- function(configs, base.line="uniprotID") {
     if (is.na(fold)) {
       fold <- 0
     }
-    baseline.file <- paste0('/share/terra/Users/gz2294/PreMode.final/analysis/esm2.inference/',
+    baseline.file <- paste0('/share/pascal/Users/gz2294/PreMode.final/analysis/esm2.inference/',
                             data.file.name, "/testing.fold.", fold, ".logits.csv")
     test.result <- read.csv(configs$data_file_test, row.names = 1)
     if (file.exists(baseline.file)) {
@@ -197,7 +197,7 @@ get.auc.by.step <- function(configs, base.line="uniprotID") {
   num_saved_batches = floor(ceiling(data.train * configs$train_size / configs$ngpus / configs$batch_size)
                             * configs$num_epochs / configs$num_save_batches) + 1
   steps <- c(1:(num_saved_batches-1))*configs$num_save_batches
-  source('/share/terra/Users/gz2294/Pipeline/AUROC.R')
+  source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
   library(doParallel)
   cl <- makeCluster(72)
   registerDoParallel(cl)
@@ -307,7 +307,7 @@ get.auc.by.step <- function(configs, base.line="uniprotID") {
   if (base.line == "uniprotID") {
     baseline.uniprotID <- system(
       paste0("/share/vault/Users/gz2294/miniconda3/envs/r4-base/bin/python ",
-             "/share/terra/Users/gz2294/PreMode.final/analysis/random.forest.process.classifier.py ",
+             "/share/pascal/Users/gz2294/PreMode.final/analysis/random.forest.process.classifier.py ",
              configs$data_file_train, " ",
              configs$data_file_test), intern = T,
     )
@@ -327,7 +327,7 @@ get.auc.by.step <- function(configs, base.line="uniprotID") {
     if (is.na(fold)) {
       fold <- 0
     }
-    baseline.file <- paste0('/share/terra/Users/gz2294/PreMode.final/analysis/esm2.inference/',
+    baseline.file <- paste0('/share/pascal/Users/gz2294/PreMode.final/analysis/esm2.inference/',
                             data.file.name, "/testing.fold.", fold, ".logits.csv")
     test.result <- read.csv(configs$data_file_test, row.names = 1)
     if (file.exists(baseline.file)) {
@@ -400,7 +400,7 @@ get.auc.by.step.split.pLDDT <- function(configs, base.line="uniprotID") {
   source('~/Pipeline/uniprot.table.add.annotation.R')
   test.file <- read.csv(configs$data_file_test)
   test.file <- uniprot.table.add.annotation.parallel(test.file, 'pLDDT.region')
-  source('/share/terra/Users/gz2294/Pipeline/AUROC.R')
+  source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
   library(doParallel)
   cl <- makeCluster(72)
   registerDoParallel(cl)
@@ -525,7 +525,7 @@ get.auc.by.step.split.pLDDT <- function(configs, base.line="uniprotID") {
   if (base.line == "uniprotID") {
     baseline.uniprotID <- system(
       paste0("/share/vault/Users/gz2294/miniconda3/envs/r4-base/bin/python ",
-             "/share/terra/Users/gz2294/PreMode.final/analysis/random.forest.process.classifier.py ",
+             "/share/pascal/Users/gz2294/PreMode.final/analysis/random.forest.process.classifier.py ",
              configs$data_file_train, " ",
              configs$data_file_test), intern = T,
     )
@@ -545,7 +545,7 @@ get.auc.by.step.split.pLDDT <- function(configs, base.line="uniprotID") {
     if (is.na(fold)) {
       fold <- 0
     }
-    baseline.file <- paste0('/share/terra/Users/gz2294/PreMode.final/analysis/esm2.inference/',
+    baseline.file <- paste0('/share/pascal/Users/gz2294/PreMode.final/analysis/esm2.inference/',
                             data.file.name, "/testing.fold.", fold, ".logits.csv")
     test.result <- read.csv(configs$data_file_test, row.names = 1)
     if (file.exists(baseline.file)) {
@@ -617,7 +617,7 @@ get.R.by.epoch <- function(configs, bin=FALSE) {
   cl <- makeCluster(72)
   registerDoParallel(cl)
   res <- foreach (i = 1:length(epochs), .combine=dplyr::bind_rows) %dopar% {
-    source('/share/terra/Users/gz2294/Pipeline/AUROC.R')
+    source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
     i <- epochs[i]
     if (file.exists(paste0(log.dir, 'test_result.epoch.', i, '.csv'))) {
       test.result <- read.csv(paste0(log.dir, 'test_result.epoch.', i, '.csv'))
@@ -681,7 +681,7 @@ get.R.by.epoch <- function(configs, bin=FALSE) {
       theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
     
     print(paste0("min val epoch R: ", round(R2s[which(val==min(val)),], digits = 100)))
-    print(paste0("end epoch R: ", round(R2s[length(R2s),], digits = 100)))
+    print(paste0("end epoch R: ", round(R2s[dim(R2s)[1],], digits = 100)))
     ggsave('Loss.R.by.epoch.pdf', p, width = min(49.9, 9 * length(epochs) / 10), height = 6)
   }
   res
@@ -703,7 +703,7 @@ get.R.by.step <- function(configs, bin=FALSE) {
   registerDoParallel(cl)
   
   res <- foreach (i = 1:length(steps), .combine = dplyr::bind_rows) %dopar% {
-    source('/share/terra/Users/gz2294/Pipeline/AUROC.R')
+    source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
     i <- steps[i]
     if (file.exists(paste0(log.dir, 'test_result.step.', i, '.csv'))) {
       test.result <- read.csv(paste0(log.dir, 'test_result.step.', i, '.csv'))

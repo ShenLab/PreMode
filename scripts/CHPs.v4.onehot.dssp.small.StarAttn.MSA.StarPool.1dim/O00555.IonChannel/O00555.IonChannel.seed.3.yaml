@@ -1,8 +1,8 @@
 ## data set specific
 dataset: GraphMutationDataset
-data_file_train: /share/terra/Users/gz2294/ld1/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/O00555.IonChannel/training.csv
-data_file_train_ddp_prefix: /share/terra/Users/gz2294/ld1/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/O00555.IonChannel/training
-data_file_test: /share/terra/Users/gz2294/ld1/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/O00555.IonChannel/testing.csv
+data_file_train: /share/pascal/Users/gz2294/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/O00555.IonChannel/training.csv
+data_file_train_ddp_prefix: /share/pascal/Users/gz2294/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/O00555.IonChannel/training
+data_file_test: /share/pascal/Users/gz2294/Data/DMS/Itan.CKB.Cancer.good.batch/pfams.0.8/O00555.IonChannel/testing.csv
 data_type: O00555.IonChannel
 loop: true # add self loop or not
 node_embedding_type: one-hot # esm, one-hot, one-hot-idx, or aa-5dim
@@ -21,7 +21,7 @@ max_len: 251
 radius: 50 # radius for KNN graph, larger than curoff_upper
 
 ## model specific
-load_model: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/model.step.56000.pt
+load_model: /share/pascal/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/model.step.56000.pt
 model_class: PreMode_Star_CON
 model: equivariant-transformer-star2-softmax
 neighbor_embedding: true
@@ -81,5 +81,5 @@ val_size: 0.25
 ## log specific
 num_save_epochs: 1
 num_save_batches: 100 # save every 1000 batches, this also control the validation frequency
-log_dir: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/TL.O00555.IonChannel.seed.3/
+log_dir: /share/pascal/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/TL.O00555.IonChannel.seed.3/
 

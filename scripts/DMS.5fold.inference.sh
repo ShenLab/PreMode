@@ -2,7 +2,6 @@
 # $1 is the name of the scripts folder
 # $2 is the output dir
 # $3 is the gpu ids that used for training, seperated by comma
-cd /share/terra/Users/gz2294/PreMode.final
 CUDA_VISIBLE_DEVICES=$3
 echo "CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES
 mkdir $2

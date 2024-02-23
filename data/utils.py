@@ -1,4 +1,5 @@
 import gzip
+import json
 import os
 import pickle
 from abc import abstractmethod
@@ -21,29 +22,31 @@ from torch_cluster import radius_graph, knn_graph
 
 # Path to the AF2 data
 AF2_DATA_PATH = '/share/pascal/Users/gz2294/Data/af2_uniprot/alphafold2_v4'
-AF2_SEQ_DICT = pd.read_csv('/share/pascal/Users/gz2294/Data/af2_uniprot/uniprot.swissprot.csv',
-                           index_col=0).set_index('file_name').T.to_dict()
+AF2_REP_DATA_PATH = '/euler/Users/gz2294/openfold/human'
+AF2_SEQ_DICT = pd.read_csv('/share/pascal/Users/gz2294/Data/af2_uniprot/swissprot_and_human.csv',
+                           index_col=0, low_memory=False).set_index('file_name').T.to_dict()
 # Path to the AF2 data
 ESM_MODEL_SIZE = '650M'
-ESM_DATA_PATH = f'/share/ark/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm2.{ESM_MODEL_SIZE}.embedding.uniprotIDs/'
+ESM_DATA_PATH = f'/share/vault/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm2.{ESM_MODEL_SIZE}.embedding.uniprotIDs/'
 # Path to the ESM2 data
 MSA_DATA_PATH_ARCHIVE = '/share/pascal/Projects/gMVP/combined_feature_2021_v2/'
-MSA_DATA_PATH = '/share/ark/Users/yz3419/variant/MSA/MSA_orthologues/'
+MSA_DATA_PATH = '/share/pascal/Users/gz2294/Data/Protein/MSA/'
+PAE_DATA_PATH = '/share/vault/Users/gz2294/Data/af2_uniprot/alphafold2_v4_PAE/'
 # Path to the ESM_MSA data
 # TODO: update the path
 MSA_ATTN_DATA_PATH = '/share/pascal/Users/gz2294/Data/gMVP.esm.MSA/'
 NUM_THREADS = 42
 # prepare esm2 embeddings
-with open(f'/share/pascal/Users/gz2294/PreMode/utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'/share/vault/Users/gz2294/PreMode/utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     LANGUAGE_MODEL = pickle.load(f)
-with open(f'/share/pascal/Users/gz2294/PreMode/utils/ALPHABET_CONVERTER.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'/share/vault/Users/gz2294/PreMode/utils/ALPHABET_CONVERTER.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     ALPHABET_CONVERTER = pickle.load(f)
-with open(f'/share/pascal/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'/share/vault/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     ESM_AA_EMBEDDING_DICT = pickle.load(f)
-with open(f'/share/pascal/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.esm1b.pkl', 'rb') as f:
+with open(f'/share/vault/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.esm1b.pkl', 'rb') as f:
     ESM1b_AA_EMBEDDING_DICT = pickle.load(f)
 # prepare 5dim embeddings
-with open(f'/share/pascal/Users/gz2294/PreMode/utils/AA_5_DIM_EMBED.pkl', 'rb') as f:
+with open(f'/share/vault/Users/gz2294/PreMode/utils/AA_5_DIM_EMBED.pkl', 'rb') as f:
     AA_5DIM_EMBED = pickle.load(f)
 # ESM tokens
 ESM_TOKENS = ['<cls>', '<pad>', '<eos>', '<unk>',
@@ -55,7 +58,10 @@ ESM_TOKENS = ['<cls>', '<pad>', '<eos>', '<unk>',
 AA_DICT = ['L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
            'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C',
            'X', 'B', 'U', 'Z', 'O', '<mask>']
+AA_DICT_HUMAN = ['L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
+                 'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C']
 DSSP_DICT = ['H', 'B', 'E', 'G', 'I', 'T', 'S', '-', 'P']
+PTM_DICT = {'ac': 0, 'ga': 1, 'gl': 2, 'm1': 3, 'm2': 4, 'm3': 5, 'me': 6, 'p': 7, 'sm': 8, 'ub': 9}
 
 class Mutation:
     """
@@ -72,14 +78,19 @@ class Mutation:
         self.seq_end_orig = None
         self.pos = None
         self.uniprot_id = None
+        self.af2_file_indic = None
         self.af2_file = None
+        self.af2_rep_file_prefix = None
         self.af2_seq_index = None
         self.msa_seq_index = None
+        self.esm_seq_index = None
+        self.af2_rep_index = None
         self.ref_aa = None
         self.alt_aa = None
         self.ESM_prefix = None
         self.crop = False
         self.seq_len = None
+        self.seq_len_orig = None
         self.max_len = max_len
         self.half_max_len = max_len // 2
         self.set_af2_fragment_idx(seq_orig, seq_orig_len, uniprot_id, pos_orig, af2_file)
@@ -89,6 +100,7 @@ class Mutation:
         self.crop_fn()
         
     def set_af2_fragment_idx(self, seq_orig, seq_orig_len, uniprot_id, pos_orig, af2_file):
+        self.seq_len_orig = seq_orig_len
         if isinstance(pos_orig, str):
             pos_orig = np.array([int(i) for i in pos_orig.split(';')])
         else:
@@ -105,6 +117,7 @@ class Mutation:
                 pos = pos_orig
                 self.ESM_prefix = f'{uniprot_id}-F{idx}'
                 seq_len = 1400
+                self.af2_rep_file_prefix = f'{AF2_REP_DATA_PATH}/{uniprot_id}-F{idx}/{uniprot_id}-F{idx}'
             else:
                 self.ESM_prefix = f'{uniprot_id}'
                 if seq_orig_len > 2700:
@@ -127,27 +140,35 @@ class Mutation:
                     seq_len = seq_orig_len
                     seq = seq_orig
                     pos = pos_orig
+                if uniprot_id == "Q8WZ42": # This protein is TTN, which is too long
+                    self.ESM_prefix = f'{uniprot_id}-F{idx}'
+                if seq_orig_len >= 7000:
+                    self.af2_rep_file_prefix = f'{AF2_REP_DATA_PATH}/{uniprot_id}-F{idx}/{uniprot_id}-F{idx}'
+                else:
+                    self.af2_rep_file_prefix = f'{AF2_REP_DATA_PATH}/{uniprot_id}/{uniprot_id}'
             self.seq = seq
             self.seq_start = seq_start
             self.seq_end = seq_end
             self.seq_len = seq_len
             self.pos = pos
             self.uniprot_id = uniprot_id
-            self.af2_file = f'{AF2_DATA_PATH}/AF-{uniprot_id}-F{idx}-model_v4.pdb.gz'
+            self.af2_file = f'{AF2_DATA_PATH}/{uniprot_id[:3]}/AF-{uniprot_id}-F{idx}-model_v4.pdb.gz'
+            self.af2_file_indic = f'{AF2_DATA_PATH}/AF-{uniprot_id}-F{idx}-model_v4.pdb.gz'
         else:
             self.af2_file = af2_file
+            self.ESM_prefix = uniprot_id
             self.seq = seq_orig
             self.seq_start = 1
             self.seq_end = seq_orig_len
-            self.seq_start_orig = seq_start
-            self.seq_end_orig = seq_end
+            self.seq_start_orig = self.seq_start
+            self.seq_end_orig = self.seq_end
             self.seq_len = seq_orig_len
             self.pos = pos_orig
             self.uniprot_id = uniprot_id
 
     def set_ref_alt_aa(self, ref_aa, alt_aa):
         # ref aa and alt aa are strings
-        if ";" in ref_aa:
+        if ";" in ref_aa or ";" in alt_aa:
             # multiple mutations
             self.ref_aa = np.array(ref_aa.split(';'))
             self.alt_aa = np.array(alt_aa.split(';'))
@@ -161,7 +182,7 @@ class Mutation:
             print(f'Warning: {self.uniprot_id} AF2 file not found: {self.af2_file}')
             self.af2_file = None
         else:
-            af2_seq = AF2_SEQ_DICT[self.af2_file]['seq']
+            af2_seq = AF2_SEQ_DICT[self.af2_file_indic]['seq']
             if af2_seq != self.seq and not self.crop:
                 # if not match and not due to crop, then the seq is not in the AF2 file
                 print(f'Warning: {self.uniprot_id} seq not match AF2 seq: {self.seq} vs {af2_seq}')
@@ -181,16 +202,19 @@ class Mutation:
                 seq_end = self.max_len
                 seq = seq[:self.max_len]
                 pos = pos
+                seq_len = self.max_len
             elif seq_len - pos[0] <= self.max_len - self.half_max_len:
                 seq_start = seq_len - self.max_len + 1
                 seq_end = seq_len
                 seq = seq[seq_start - 1:]
                 pos = pos - seq_start + 1
+                seq_len = self.max_len
             else:
                 seq_start = pos[0] - self.half_max_len
                 seq_end = pos[0] + self.max_len - self.half_max_len - 1
                 seq = seq[seq_start - 1:seq_end]
                 pos = pos - seq_start + 1
+                seq_len = self.max_len
             self.crop = True
             self.seq = seq
             self.seq_start = seq_start
@@ -203,6 +227,12 @@ class Mutation:
 
     def set_msa_seq_index(self, idx):
         self.msa_seq_index = idx
+
+    def set_esm_seq_index(self, idx):
+        self.esm_seq_index = idx
+    
+    def set_af2_rep_index(self, idx):
+        self.af2_rep_index = idx
 
 
 class RandomPointMutation(Mutation):
@@ -230,6 +260,29 @@ class MaskPredictPointMutation(Mutation):
             print(f'Warning: {self.uniprot_id} AF2 file not found: {self.af2_file}')
             self.af2_file = None
         self.af2_seq_index = None  # Use index to avoid loading the same seq multiple times
+
+
+def convert_to_onesite(dataset: pd.DataFrame):
+    # first get unique uniprotID and pos.orig
+    dataset_onesite = dataset.copy(deep=True)
+    dataset_onesite = dataset_onesite.drop_duplicates(subset=['uniprotID', 'pos.orig'])
+    # then for each unique uniprotID and pos.orig, get all ref and alt aa, as well as their scores
+    # if exists the confidence of score, then use it, otherwise use 1
+    # get score and confidence.score columns
+    score_cols = [col for col in dataset.columns if col.startswith('score')]
+    confidence_cols = [col for col in dataset.columns if col.startswith('confidence.score')]
+    for i in dataset_onesite.index:
+        subdataset = dataset[(dataset['uniprotID'] == dataset_onesite.loc[i, 'uniprotID']) & (dataset['pos.orig'] == dataset_onesite.loc[i, 'pos.orig'])]
+        dataset_onesite.loc[i, 'ref_aa'] = ';'.join(subdataset['ref_aa'].values)
+        dataset_onesite.loc[i, 'alt_aa'] = ';'.join(subdataset['alt_aa'].values)
+        # if score_cols and confidence_cols are not empty, then concatenate them
+        if len(score_cols) > 0:
+            for col in score_cols:
+                dataset_onesite.loc[i, col] = ';'.join(subdataset[col].values)
+        if len(confidence_cols) > 0:
+            for col in confidence_cols:
+                dataset_onesite.loc[i, col] = ';'.join(subdataset[col].values)
+    return dataset
 
 
 def load_structure(fpath, chain=None):
@@ -419,6 +472,23 @@ def get_dssp_from_af2(af2_file):
                            dssp.iloc[:, 5].values[:, None] / 180 * np.pi], axis=1)
 
 
+def get_ptm_from_mutation(mutation: Mutation, ptm_ref):
+    # for each af2 file, match the PTM anno to it
+    # get uniprotID
+    uniprotID = mutation.uniprot_id
+    ptm_ref = ptm_ref[ptm_ref['uniprotID'] == uniprotID]
+    seq = mutation.seq
+    # get fragment start and end
+    ptm_ref['pos'] = ptm_ref['pos'] - mutation.seq_start_orig - mutation.seq_start + 1
+    ptm_ref = ptm_ref[ptm_ref['pos'] >= 0]
+    ptm_ref = ptm_ref[ptm_ref['pos'] < mutation.seq_len]
+    ptm_mat = np.zeros([mutation.seq_len, len(PTM_DICT)])
+    for i in ptm_ref.index:
+        if ptm_ref['ref'].loc[i] == seq[ptm_ref['pos'].loc[i]]:
+            ptm_mat[ptm_ref['pos'].loc[i], PTM_DICT[ptm_ref['type'].loc[i]]] = 1
+    return ptm_mat
+
+
 def get_knn_graphs_from_af2(af2_coords, radius=None, max_neighbors=None, loop=False, gpu_id=None):
     CA_coord = af2_coords[:, 3]
     if radius is None:
@@ -432,7 +502,7 @@ def get_knn_graphs_from_af2(af2_coords, radius=None, max_neighbors=None, loop=Fa
         with torch.no_grad():
             CA_coord = torch.from_numpy(CA_coord)
             edge_index = knn_graph(
-                x=CA_coord.to(f'cuda:{gpu_id}') if gpu_id is not None else CA_coord,
+                x=CA_coord.to(f'cuda:{gpu_id}') if gpu_id is not None and torch.cuda.is_available() else CA_coord,
                 # r=radius,
                 loop=loop,
                 # max_num_neighbors=max_neighbors,
@@ -449,13 +519,40 @@ def get_radius_graphs_from_af2(af2_coords, radius, loop=False, gpu_id=None):
     with torch.no_grad():
         CA_coord = torch.from_numpy(CA_coord)
         edge_index = radius_graph(
-            x=CA_coord.to(f'cuda:{gpu_id}') if gpu_id is not None else CA_coord,
+            x=CA_coord.to(f'cuda:{gpu_id}') if gpu_id is not None and torch.cuda.is_available() else CA_coord,
             r=radius,
             loop=loop,
             max_num_neighbors=max_neighbors,
             num_workers=NUM_THREADS,
         ).detach().cpu().numpy()
         del CA_coord
+    return edge_index
+
+
+def get_radius_knn_graphs_from_af2(af2_coords, center_nodes, radius, max_neighbors, loop=False, gpu_id=None):
+    # first get radius graph at the center nodes, then get knn graph for other nodes
+    CA_coord = af2_coords[:, 3]
+    with torch.no_grad():
+        CA_coord = torch.from_numpy(CA_coord)
+        edge_index = radius_graph(
+            x=CA_coord.to(f'cuda:{gpu_id}') if gpu_id is not None and torch.cuda.is_available() else CA_coord,
+            r=radius,
+            loop=loop,
+            max_num_neighbors=af2_coords.shape[0] + 1,
+            num_workers=NUM_THREADS,
+        ).detach().cpu().numpy()
+        # filter edge_index so that only center nodes are kept
+        edge_index_radius = edge_index[:, np.isin(edge_index[0], center_nodes)]
+        # next get knn graph for other nodes
+        edge_index = knn_graph(
+                x=CA_coord.to(f'cuda:{gpu_id}') if gpu_id is not None and torch.cuda.is_available() else CA_coord,
+                loop=loop,
+                k=max_neighbors,
+                num_workers=NUM_THREADS,
+            ).detach().cpu().numpy()
+        del CA_coord
+        # only keep nodes that are in the radius graph
+        edge_index = edge_index[:, np.isin(edge_index[0], edge_index_radius.flatten()) & np.isin(edge_index[1], edge_index_radius.flatten())]
     return edge_index
 
 
@@ -496,9 +593,42 @@ def get_embedding_from_esm2(protein, check_mode=True, seq_start=None, seq_end=No
     return batch_tokens
 
 
+def get_esm_dict_from_uniprot(uniprotID):
+    file_path = f"{ESM_DATA_PATH}/{uniprotID}.representations.layer.48.npy"
+    wt_orig = np.load(file_path)
+    return wt_orig
+
+
+def get_af2_single_rep_dict_from_prefix(uniprotID_prefix):
+    # sometimes colabfold will padding the results, we need to remove the padding
+    file_path = f"{uniprotID_prefix}_single_repr_rank_001_alphafold2_ptm_model_1_seed_000.npy"
+    wt_orig = np.load(file_path)
+    # padding_length = 0
+    # last_i = 1
+    # while np.all(wt_orig[-last_i-1] == wt_orig[-last_i]):
+    #     # remove the last line if it is the same as the second last line
+    #     last_i -= 1
+    #     padding_length += 1
+    # if padding_length > 0:
+    #     wt_orig = wt_orig[:-(padding_length+1)]
+    return wt_orig
+
+
+def get_af2_pairwise_rep_dict_from_prefix(uniprotID_prefix):
+    file_path = f"{uniprotID_prefix}_pair_repr_rank_001_alphafold2_ptm_model_1_seed_000.npy"
+    wt_orig = np.load(file_path)
+    # padding_length = 0
+    # last_i = 1
+    # while np.all(wt_orig[-last_i-1] == wt_orig[-last_i]):
+    #     # remove the last line if it is the same as the second last line
+    #     last_i -= 1
+    #     padding_length += 1
+    return wt_orig
+
+
 def get_embedding_from_esm1b(protein, check_mode=True, seq_start=None, seq_end=None):
     if isinstance(protein, str):
-        file_path = f"/share/ark/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm1b.embedding.uniprotIDs/{protein}.representations.layer.48.npy"
+        file_path = f"/share/vault/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm1b.embedding.uniprotIDs/{protein}.representations.layer.48.npy"
         if os.path.exists(file_path):
             if check_mode:
                 return True
@@ -539,6 +669,30 @@ def get_embedding_from_onehot(seq, seq_start=None, seq_end=None, return_idx=Fals
     else:
         if return_onehot_mat:
             return batch_tokens, one_hot_mat
+        else:
+            return batch_tokens
+
+
+def get_embedding_from_esm_onehot(seq, seq_start=None, seq_end=None, return_idx=False, aa_dict=None, return_onehot_mat=False):
+    if aa_dict is None:
+        idx = [ESM_TOKENS.index('<cls>')] + [ESM_TOKENS.index(aa) for aa in seq] + [ESM_TOKENS.index('<eos>')]
+        # directly return idxs but not one-hot matrix
+        protein = np.array(idx)
+    else:
+        idx = [aa_dict.index(aa) for aa in seq]
+        protein = np.array(idx)
+    if seq_start is not None and seq_end is not None:
+        batch_tokens = protein[max(0, seq_start - 1): min(protein.shape[0], seq_end)]
+    else:
+        batch_tokens = protein
+    if return_idx:
+        if return_onehot_mat:
+            return batch_tokens, np.array(idx), None
+        else:
+            return batch_tokens, np.array(idx)
+    else:
+        if return_onehot_mat:
+            return batch_tokens, None
         else:
             return batch_tokens
 
@@ -646,6 +800,20 @@ def get_msa_dict_from_transcript(uniprotID):
         conservation = np.eye(21)[msa_mat.astype(int)].mean(axis=1)[:, :20]
         msa = msa_mat
     return msa_seq, conservation, msa
+
+
+def get_confidence_from_af2file(af2file, pLDDT):
+    uniprotID = af2file.split('/')[-1].split('.')[0].split('-model')[0]
+    if pd.isna(uniprotID) or not os.path.exists(f'{PAE_DATA_PATH}/{uniprotID[3:6]}/{uniprotID}-predicted_aligned_error_v4.json.gz'):
+        # if PAE does not exist, use pLDDT
+        # pae = (pLDDT[None, :] + pLDDT[:, None]) / 200 if not pLDDT is None else None
+        pae = (200 - pLDDT[None, :] - pLDDT[:, None]) / 4 if not pLDDT is None else None
+    else:
+        with gzip.open(f'{PAE_DATA_PATH}/{uniprotID[3:6]}/{uniprotID}-predicted_aligned_error_v4.json.gz', 'rt') as f:
+            pae = json.load(f)
+        # pae = np.exp(-0.08*np.array(pae[0]['predicted_aligned_error']))
+        pae = np.array(pae[0]['predicted_aligned_error'])
+    return pae
 
 
 def get_msa(mutation: Mutation, check_mode=False):

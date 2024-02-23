@@ -1,13 +1,21 @@
 library(ggplot2)
-CHPs <- read.csv('~/Data/DMS/ClinVar.HGMD.PrimateAI.syn/all.clinvar.4.splits/training.csv', row.names = 1)
-CHPs.test <- read.csv('/share/vault/Users/gz2294/PreMode.final/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/test_result.step.30000.csv', row.names = 1)
+# CHPs <- read.csv('~/Data/DMS/ClinVar.HGMD.PrimateAI.syn/all.clinvar.4.splits/training.csv', row.names = 1)
+CHPs.test <- read.csv('/share/pascal/Users/gz2294/PreMode.final/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/test_result.step.30000.csv', row.names = 1)
 CHPs.test.no.esm <- read.csv('/share/pascal/Users/gz2294/PreMode.final/CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/test_result.step.56000.csv', row.names = 1)
-CHPs.test.no.structure <- read.csv('/share/pascal/Users/gz2294/PreMode.final/CHPs.v4.pass.seed.0/test_result.step.88000.csv', row.names = 1)
+CHPs.test.no.se3 <- read.csv('/share/pascal/Users/gz2294/PreMode.final/CHPs.v4.pass.seed.0/test_result.step.88000.csv', row.names = 1)
+CHPs.test.no.structure <- read.csv('/share/vault/Users/gz2294/PreMode.final/CHPs.v4.noStructure.seed.0/test_result.step.15000.csv', row.names = 1)
+CHPs.test.no.MSA <- read.csv('/share/vault/Users/gz2294/PreMode.final/CHPs.v4.noMSA.seed.0/test_result.step.42000.csv', row.names = 1)
+
 CHPs.test$unique.id <- paste0(CHPs.test$uniprotID, ":", CHPs.test$aaChg)
 CHPs.test.no.esm$unique.id <- paste0(CHPs.test.no.esm$uniprotID, ":", CHPs.test.no.esm$aaChg)
 CHPs.test.no.structure$unique.id <- paste0(CHPs.test.no.structure$uniprotID, ":", CHPs.test.no.structure$aaChg)
+CHPs.test.no.se3$unique.id <- paste0(CHPs.test.no.se3$uniprotID, ":", CHPs.test.no.se3$aaChg)
+CHPs.test.no.MSA$unique.id <- paste0(CHPs.test.no.MSA$uniprotID, ":", CHPs.test.no.MSA$aaChg)
+
+CHPs.test.no.se3 <- CHPs.test.no.se3[match(CHPs.test$unique.id, CHPs.test.no.se3$unique.id),]
 CHPs.test.no.esm <- CHPs.test.no.esm[match(CHPs.test$unique.id, CHPs.test.no.esm$unique.id),]
 CHPs.test.no.structure <- CHPs.test.no.structure[match(CHPs.test$unique.id, CHPs.test.no.structure$unique.id),]
+CHPs.test.no.MSA <- CHPs.test.no.MSA[match(CHPs.test$unique.id, CHPs.test.no.MSA$unique.id),]
 
 source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
 auc.list <- list()
@@ -19,19 +27,15 @@ auc.list[[1]] <- plot.AUC(CHPs.test$score, CHPs.test$y.0)
 auc.list[[2]] <- plot.AUC(CHPs.test.no.esm$score, CHPs.test.no.esm$y.0)
 # plot.AUC(CHPs.test$score[!is.na(CHPs.test$EVE)], CHPs.test$y.0[!is.na(CHPs.test$EVE)])
 
-auc.list[[3]] <- plot.AUC(CHPs.test.no.structure$score, CHPs.test.no.structure$y.0)
+auc.list[[3]] <- plot.AUC(CHPs.test.no.structure$score, CHPs.test.no.structure$logits)
+auc.list[[4]] <- plot.AUC(CHPs.test.no.se3$score, CHPs.test.no.se3$y.0)
+auc.list[[5]] <- plot.AUC(CHPs.test.no.MSA$score, CHPs.test.no.MSA$y.0)
 # plot.AUC(CHPs.test$score[!is.na(CHPs.test$REVEL)], CHPs.test$y.0[!is.na(CHPs.test$REVEL)])
 # annotate plddt
-source('/share/pascal/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
-CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'pLDDT')
-CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'pLDDT.all')
-CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'pLDDT.region')
-auc.list[[4]] <- plot.AUC(CHPs.test$score[CHPs.test$pLDDT.region>=90], CHPs.test$y.0[CHPs.test$pLDDT.region>=90])
-auc.list[[5]] <- plot.AUC(CHPs.test.no.esm$score[CHPs.test$pLDDT.region>=90], CHPs.test.no.esm$y.0[CHPs.test$pLDDT.region>=90])
-auc.list[[6]] <- plot.AUC(CHPs.test.no.structure$score[CHPs.test$pLDDT.region>=90], CHPs.test.no.structure$y.0[CHPs.test$pLDDT.region>=90])
+source('/share/vault/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
+CHPs.test <- uniprot.table.add.annotation.parallel(CHPs.test, 'ESM1b')
 
-
-model.names <- c("PreMode", "No ESM", "No Structure")
+model.names <- c("PreMode", "PreMode:\nNo ESM", "PreMode:\nNo Structure", "ESM + SLP",  "PreMode:\nNo MSA")
 to.plot <- data.frame()
 model.rank <- c()
 model.name <- c()

@@ -1,5 +1,5 @@
 genes <- c("P15056", "P21802", "P07949", "P04637", "Q09428", "Q14654", "Q14524", "P60484", "O00555", "Q99250", "P22607", "P21802", "Q9NV35")
-af2.seqs <- read.csv('~/Data/Protein/alphafold2_v4/swissprot_and_human.full.seq.csv', row.names = 1)
+af2.seqs <- read.csv('~/Data/af2_uniprot/swissprot_and_human.full.seq.csv', row.names = 1)
 ICC <- read.csv('figs/ALL.csv', row.names = 1)
 aa.dict <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
              'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
@@ -8,7 +8,7 @@ source('~/Pipeline/dnv.table.to.uniprot.R')
 for (gene in genes) {
   gene.seq <- af2.seqs$seq[af2.seqs$uniprotID==gene]
   all.variants <- c()
-  for (i in 2:nchar(gene.seq)) {
+  for (i in 1:nchar(gene.seq)) {
     ref <- substr(gene.seq, i, i)
     alts <- aa.dict[aa.dict != ref]
     for (alt in alts) {

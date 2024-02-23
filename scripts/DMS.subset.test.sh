@@ -3,7 +3,6 @@
 # $2 are the tasks to run, seperated by comma
 # $3 is the gpu ids that used for training, seperated by comma
 # $4 is an optional argument that, if present, skips the check for finished tasks
-cd /share/terra/Users/gz2294/PreMode.final
 IFS=',' read -ra arr <<< $2
 CUDA_VISIBLE_DEVICES=$3
 for gene in ${arr[@]}

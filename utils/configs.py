@@ -2,7 +2,6 @@ import argparse
 import numpy as np
 import torch
 import yaml
-from pytorch_lightning.utilities import rank_zero_warn
 
 
 class LoadFromFile(argparse.Action):
@@ -19,7 +18,7 @@ class LoadFromFile(argparse.Action):
                     and namespace.load_model is not None
                     and config["load_model"] != namespace.load_model
             ):
-                rank_zero_warn(
+                Warning(
                     f"The load model argument was specified as a command line argument "
                     f"({namespace.load_model}) and in the config file ({config['load_model']}). "
                     f"Ignoring 'load_model' from the config file and loading {namespace.load_model}."
@@ -71,7 +70,7 @@ def train_val_test_split(dset_len, train_size, val_size, test_size, seed, order=
         f"combined split sizes ({total})."
     )
     if total < dset_len:
-        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+        Warning(f"{dset_len - total} samples were excluded from the dataset")
 
     idxs = np.arange(dset_len, dtype=np.int)
     if order is None:
@@ -153,7 +152,7 @@ def train_val_split(dset_len, train_size, val_size, seed, order=None):
         f"combined split sizes ({total})."
     )
     if total < dset_len:
-        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+        Warning(f"{dset_len - total} samples were excluded from the dataset")
 
     idxs = np.arange(dset_len, dtype=np.int)
     if order is None:
@@ -258,7 +257,7 @@ def train_val_split_by_uniprot_id(dset, train_size, val_size, seed, batch_size=4
         f"combined split sizes ({total})."
     )
     if total < dset_len:
-        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+        Warning(f"{dset_len - total} samples were excluded from the dataset")
 
     uniprot_freq_table = dset.data.uniprotID.value_counts()
     selected_val_uniprotIDs, _ = select_by_uniprot(uniprot_freq_table, val_size)
@@ -343,7 +342,7 @@ def train_val_split_by_good_batch(dset, train_size, val_size, seed, batch_size=4
         f"combined split sizes ({total})."
     )
     if total < dset_len:
-        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+        Warning(f"{dset_len - total} samples were excluded from the dataset")
 
     idxs = np.arange(dset_len, dtype=np.int)
     if order is None:
@@ -423,7 +422,7 @@ def train_val_split_by_uniprot_id_good_batch(dset, train_size, val_size, seed, b
         f"combined split sizes ({total})."
     )
     if total < dset_len:
-        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+        Warning(f"{dset_len - total} samples were excluded from the dataset")
 
     uniprot_freq_table = dset.data.uniprotID.value_counts()
     selected_val_uniprotIDs, _ = select_by_uniprot(uniprot_freq_table, val_size)
@@ -509,7 +508,7 @@ def train_val_test_split_by_uniprot_id(dset, train_size, val_size, test_size, se
         f"combined split sizes ({total})."
     )
     if total < dset_len:
-        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+        Warning(f"{dset_len - total} samples were excluded from the dataset")
 
     uniprot_freq_table = dset.data.uniprotID.value_counts()
     selected_test_uniprotIDs, uniprot_freq_table = select_by_uniprot(uniprot_freq_table, test_size)

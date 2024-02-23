@@ -1,8 +1,8 @@
 ## data set specific
 dataset: GraphMutationDataset
-data_file_train: /share/terra/Users/gz2294/ld1/Data/DMS/DLG4_RAT_Ranganathan2012-CRIPT/train.seed.2.csv
-data_file_train_ddp_prefix: /share/terra/Users/gz2294/ld1/Data/DMS/DLG4_RAT_Ranganathan2012-CRIPT/training
-data_file_test: /share/terra/Users/gz2294/ld1/Data/DMS/DLG4_RAT_Ranganathan2012-CRIPT/test.seed.2.csv
+data_file_train: /share/vault/Users/gz2294/Data/DMS/DLG4_RAT_Ranganathan2012-CRIPT/train.seed.2.csv
+data_file_train_ddp_prefix: /share/vault/Users/gz2294/Data/DMS/DLG4_RAT_Ranganathan2012-CRIPT/training
+data_file_test: /share/vault/Users/gz2294/Data/DMS/DLG4_RAT_Ranganathan2012-CRIPT/test.seed.2.csv
 data_type: DLG4_RAT_Ranganathan2012-CRIPT
 loop: true # add self loop or not
 node_embedding_type: esm # esm, one-hot, one-hot-idx, or aa-5dim
@@ -45,7 +45,7 @@ num_nodes: 1
 num_rbf: 32 # number of radial basis functions, use a small size for quicker training
 rbf_type: expnormunlim
 trainable_rbf: true
-num_workers: 10
+num_workers: 0
 output_model: EquivariantRegressionStarPoolScalar
 reduce_op: mean
 output_dim: 1
@@ -69,7 +69,7 @@ ngpus: 1
 use_lora: 
 num_epochs: 80
 loss_fn: mse_loss
-data_split_fn: ""
+data_split_fn: _by_anno
 y_weight: 1.0
 contrastive_loss_fn: null
 reset_train_dataloader_each_epoch: true
@@ -83,3 +83,5 @@ num_save_epochs: 1
 num_save_batches: 100 # save every 1000 batches, this also control the validation frequency
 log_dir: /share/vault/Users/gz2294/PreMode.final/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim.seed.0/TL.DLG4_RAT_Ranganathan2012-CRIPT.seed.0.fold.2/
 
+loaded_confidence: true
+loaded_esm: true

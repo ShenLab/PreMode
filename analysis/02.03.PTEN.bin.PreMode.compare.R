@@ -49,17 +49,27 @@ for (i in 1:length(genes)) {
     # REVEL, PrimateAI, ESM AUC
     test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
                                    '/test.fold.', fold, '.annotated.csv'), row.names = 1)
+    test.onehot.result <- read.csv(paste0('PreMode.onehot.inference/', genes[i], '/',
+                                   '/testing.fold.', fold, '.csv'))
+    test.pass.result <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
+                                   '/testing.fold.', fold, '.csv'))
+    
     length.task <- length(task.dic[[genes[i]]])
     PreMode.auc <- plot.R2(test.result[,c("score.1", "score.2")], test.result[,paste0("logits.", 0:(length.task-1))], bin = T)
+    PreMode.onehot.auc <- plot.R2(test.onehot.result[,c("score.1", "score.2")], test.onehot.result[,paste0("logits.", 0:(length.task-1))], bin = T)
+    PreMode.pass.auc <- plot.R2(test.pass.result[,c("score.1", "score.2")], test.pass.result[,paste0("logits.", 0:(length.task-1))], bin = T)
+    
     PreMode.pretrain.auc <- plot.R2(test.result[,c("score.1", "score.2")], -test.result[,rep("pretrain.logits", length.task)], bin = T)
     REVEL.auc <- plot.R2(test.result[,c("score.1", "score.2")], -test.result[,rep("REVEL", length.task)], bin = T)
     PrimateAI.auc <- plot.R2(test.result[,c("score.1", "score.2")], -test.result[,rep("PrimateAI", length.task)], bin = T)
     ESM.auc <- plot.R2(test.result[,c("score.1", "score.2")], test.result[,rep("esm.logits", length.task)], bin = T)
     EVE.auc <- plot.R2(test.result[,c("score.1", "score.2")], -test.result[,rep("EVE", length.task)], bin = T)
     gMVP.auc <- plot.R2(test.result[,c("score.1", "score.2")], -test.result[,rep("gMVP", length.task)], bin = T)
-    to.append <- data.frame(min.val.auc = c(PreMode.pretrain.auc$R2, PreMode.auc$R2, REVEL.auc$R2, PrimateAI.auc$R2, ESM.auc$R2, EVE.auc$R2, gMVP.auc$R2),
-                            task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 7)))
-    to.append$model <- rep(c("PreMode.pretrain", "PreMode.transfer", "REVEL", "PrimateAI", "ESM", 'EVE', 'gMVP'), each = length.task)
+    to.append <- data.frame(min.val.auc = c(PreMode.pretrain.auc$R2, PreMode.auc$R2, PreMode.onehot.auc$R2, PreMode.pass.auc$R2, 
+                                            REVEL.auc$R2, PrimateAI.auc$R2, ESM.auc$R2, EVE.auc$R2, gMVP.auc$R2),
+                            task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 9)))
+    to.append$model <- rep(c("PreMode.zero.shot", "PreMode", "Baseline (No ESM)", "Baseline (No Structure)", 
+                             "REVEL", "PrimateAI", "ESM", 'EVE', 'gMVP'), each = length.task)
     result <- rbind(result, to.append)
   }
 }
@@ -68,9 +78,6 @@ write.csv(result, 'figs/02.03.PTEN.bin.PreMode.compare.csv')
 num.models <- length(unique(result$model))
 p <- ggplot(result, aes(y=min.val.auc, x=task.name, col=model)) +
   geom_point(alpha=0.2) +
-  # geom_boxplot(width = 0.5, coef = 0) +
-  # geom_segment(aes(x = as.numeric(factor(task))-0.4, xend = as.numeric(factor(task))+0.4, 
-  #                  y = baseline.auc, yend = baseline.auc), color = "black") +
   stat_summary(data = result,
                aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
                    y = min.val.auc, col=model), 
@@ -84,6 +91,26 @@ p <- ggplot(result, aes(y=min.val.auc, x=task.name, col=model)) +
   theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
         legend.position="bottom", 
         legend.direction="horizontal") +
-  # ylim(0.5, 1) + 
-  xlab('task: (LoF/GoF)')
+  xlab('task: Molecular Level Mode of Action')
 ggsave(paste0('figs/02.03.PTEN.bin.PreMode.compare.pdf'), p, height = 6, width = 2)
+
+num.models <- 4
+result.small <- result[startsWith(result$model, 'PreMode') | startsWith(result$model, 'Baseline'),]
+p <- ggplot(result.small, aes(y=min.val.auc, x=task.name, col=model)) +
+  geom_point(alpha=0.2) +
+  stat_summary(data = result.small,
+               aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
+                   y = min.val.auc, col=model), 
+               fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  stat_summary(data = result.small, 
+               aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
+                   y = min.val.auc, col=model), 
+               fun.data = mean_se, geom = "point") +
+  labs(x = "task", y = "min.val.auc", fill = "model") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
+        legend.position="bottom", 
+        legend.direction="horizontal") +
+  ylab('AUC') +
+  xlab('task: Molecular Level Mode of Action')
+ggsave(paste0('figs/02.03.PTEN.bin.PreMode.only.compare.pdf'), p, height = 5, width = 1.65)

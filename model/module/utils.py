@@ -4,9 +4,13 @@ from typing import Optional
 
 import math
 import torch
+from torch import _dynamo
+_dynamo.config.suppress_errors = True
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.functional import mse_loss, l1_loss, binary_cross_entropy, cross_entropy, kl_div, nll_loss
+from pyro.distributions.conjugate import BetaBinomial
+from pyro.distributions import Normal
 from torch_geometric.nn import MessagePassing
 
 
@@ -306,6 +310,7 @@ def gelu(x):
 
 act_class_mapping = {
     "ssp": ShiftedSoftplus,
+    "softplus": nn.Softplus,
     "silu": nn.SiLU,
     "leaky_relu": nn.LeakyReLU,
     "tanh": nn.Tanh,
@@ -395,7 +400,7 @@ class WeightedLoss1(nn.modules.loss._WeightedLoss):
         self.ignore_index = ignore_index
         self.task_weight = task_weight
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, target: torch.Tensor, weight: torch.Tensor=None, reduce=True, reduction=None) -> torch.Tensor:
         # my custom loss function, target should be -1, 0, 1, 3.
         # -1 represents LoF
         # 0 represents neutral
@@ -408,15 +413,21 @@ class WeightedLoss1(nn.modules.loss._WeightedLoss):
         # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
         # if target.ndim == 2:
         #     target = target.squeeze(1)
+        if reduction is None:
+            reduction = self.reduction
         weight_1 = self.weight[:2]
         target_1 = (target).float()
         weight_loss_1 = torch.ones_like(target_1, dtype=input.dtype, device=input.device)
         weight_loss_1[target == 1] = weight_1[1] / weight_1[0]
+        if weight is not None:
+            weight_loss_1 *= weight
         loss_1 = binary_cross_entropy(input=input,
                                       target=target_1,
                                       weight=weight_loss_1,
-                                      reduction=self.reduction)
+                                      reduce=reduce,
+                                      reduction=reduction)
         return loss_1
+
 
 class WeightedLoss2(nn.modules.loss._WeightedLoss):
     """
@@ -433,7 +444,7 @@ class WeightedLoss2(nn.modules.loss._WeightedLoss):
         self.ignore_index = ignore_index
         self.task_weight = task_weight
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, target: torch.Tensor, weight: torch.Tensor=None, reduce=True, reduction=None) -> torch.Tensor:
         # my custom loss function, target should be -1, 0, 1, 3.
         # -1 represents LoF
         # 0 represents neutral
@@ -446,6 +457,136 @@ class WeightedLoss2(nn.modules.loss._WeightedLoss):
         # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
         # if target.ndim == 2:
         #     target = target.squeeze(1)
+        # weight is unused
+        target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).float()
+        if reduction is None:
+            reduction = self.reduction
+        loss_1 = binary_cross_entropy(input=input,
+                                      target=target_1,
+                                      weight=weight,
+                                      reduce=reduce,
+                                      reduction=reduction)
+        # only do the calculation if target equals -1 or 1
+        filter = (target == -1) | (target == 1)
+        # if filter is all False, then loss_2 is 0
+        if not filter.any():
+            return 0 * loss_1
+        # 1 is !!GoF!!, 0 is !!LoF!!
+        weight_2 = self.weight[2:]
+        # then, we transfer the target to 0, 1, 0 is !!GoF!!, 1 is !!LoF!!
+        target_2 = (1/2 * (-target + 1)).float()
+        # loss_2 is the cross entropy loss on pathogenic / neutral / GoF
+        weight_loss_2 = torch.ones_like(target_2, dtype=input.dtype, device=input.device)
+        weight_loss_2[target == 1] = weight_2[1] / weight_2[0]
+        if weight is not None:
+            weight_loss_2 *= weight
+        loss_2 = binary_cross_entropy(input=input[filter],
+                                      target=target_2[filter],
+                                      weight=weight_loss_2[filter],
+                                      reduce=reduce,
+                                      reduction=reduction)
+        return loss_2
+
+
+class WeightedLoss3(nn.modules.loss._WeightedLoss):
+    """
+    Weighted combined loss function.
+    Input weight should be a tensor of shape (5,).
+    The first 2 weights are for the patho/beni loss
+    The last 3 weights are for the beni/gof/lof loss
+    """
+    def __init__(self, weight: Optional[torch.Tensor] = None, 
+                 task_weight: float = 10.0,
+                 size_average=None, ignore_index: int = -100,
+                 reduce=None, reduction: str = 'mean') -> None:
+        super().__init__(weight, size_average, reduce, reduction)
+        self.ignore_index = ignore_index
+        self.task_weight = task_weight
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor, weight: torch.Tensor=None, reduce=True, reduction=None) -> torch.Tensor:
+        # my custom loss function, target should be -1, 0, 1, 3.
+        # -1 represents LoF
+        # 0 represents neutral
+        # 1 represents GoF
+        # 3 represents pathogenic, but unknown LoF or GoF
+        # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+        # the first column is the probability of neutral / pathogenic,
+        # the second column is the probability of GoF / LoF,
+        # reshape target to 1D tensor
+        # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
+        # if target.ndim == 2:
+        #     target = target.squeeze(1)
+        # weight is unused
+        # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+        target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).float()
+        if reduction is None:
+            reduction = self.reduction
+        loss_1 = binary_cross_entropy(input=input[:, 0]/(input[:, 0] + input[:, 1]),
+                                      target=target_1,
+                                      weight=weight,
+                                      reduce=reduce,
+                                      reduction=reduction)
+        # only do the calculation if target equals -1 or 1
+        filter = (target == -1) | (target == 1)
+        # if filter is all False, then loss_2 is 0
+        if not filter.any():
+            return 0 * loss_1
+        # 1 is !!GoF!!, 0 is !!LoF!!
+        weight_2 = self.weight[2:]
+        # then, we transfer the target to 0, 1, 0 is !!GoF!!, 1 is !!LoF!!
+        target_2 = (1/2 * (-target + 1)).float()
+        # loss_2 is the cross entropy loss on pathogenic / neutral / GoF
+        weight_loss_2 = torch.ones_like(target_2, dtype=input.dtype, device=input.device)
+        weight_loss_2[target == 1] = weight_2[1] / weight_2[0]
+        if weight is not None:
+            weight_loss_2 *= weight
+        loss_2 = -BetaBinomial(
+                        concentration1=input[:, 0][filter],
+                        concentration0=input[:, 1][filter],
+                        total_count=1
+                    ).log_prob(target_2[filter])
+        # loss_2 times weights
+        loss_2 *= weight_loss_2[filter]
+        # mean over all pairs
+        loss_2 = loss_2.mean()
+        return loss_2
+
+
+class RegressionWeightedLoss(nn.modules.loss._WeightedLoss):
+    """
+    Weighted combined loss function.
+    Input weight should be a tensor of shape (5,).
+    The first 2 weights are for the patho/beni loss
+    The last 3 weights are for the beni/gof/lof loss
+    """
+    def __init__(self, weight: Optional[torch.Tensor] = None, 
+                 task_weight: float = 10.0,
+                 size_average=None, ignore_index: int = -100,
+                 reduce=None, reduction: str = 'mean') -> None:
+        super().__init__(weight, size_average, reduce, reduction)
+        self.ignore_index = ignore_index
+        self.task_weight = task_weight
+
+    def forward(self, input, target) -> torch.Tensor:
+        # my custom loss function, target should be -1, 0, 1, 3.
+        # -1 represents LoF
+        # 0 represents neutral
+        # 1 represents GoF
+        # 3 represents pathogenic, but unknown LoF or GoF
+        # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+        # the first column is the probability of neutral / pathogenic,
+        # the second column is the probability of GoF / LoF,
+        # reshape target to 1D tensor
+        # first, we transfer the target to 0, 1, 0 is neutral, 1 is pathogenic
+        # if target.ndim == 2:
+        #     target = target.squeeze(1)
+        regression_target = target[:, 1:]
+        regression_input = input[:, 1:]
+        regression_loss = mse_loss(input=regression_input,
+                                   target=regression_target,
+                                   reduction=self.reduction)
+        target = target[:, [0]]
+        input = input[:, [0]]
         target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).float()
         loss_1 = binary_cross_entropy(input=input,
                                       target=target_1,
@@ -466,7 +607,12 @@ class WeightedLoss2(nn.modules.loss._WeightedLoss):
                                       target=target_2[filter],
                                       weight=weight_loss_2[filter],
                                       reduction=self.reduction)
-        return loss_2
+        return loss_2 + regression_loss
+
+
+class GPLoss(nn.modules.loss._WeightedLoss):
+    def __init__():
+        super().__init__()
 
 
 def combined_loss_archive(input: torch.Tensor, target: torch.Tensor,
@@ -569,8 +715,30 @@ def combined_loss(input: torch.Tensor, target: torch.Tensor,
     return loss
 
 
+def gaussian_loss(input: torch.Tensor, target: torch.Tensor):
+    # input should be the output of the model, which is a 2D tensor with shape [batch_size, 2]
+    # the first column is the mean of the gaussian distribution,
+    # the second column is the standard deviation of the gaussian distribution,
+    # we should add another loss to control the standard deviation
+    loss = -Normal(loc=input[:, 0], scale=torch.nn.functional.softplus(input[:, 1])).log_prob(target).mean()
+    loss += torch.nn.functional.softplus(input[:, 1]).mean()
+    return loss
+
+
+def mse_loss_weighted(input: torch.Tensor, target: torch.Tensor, weight: torch.Tensor=None, reduce=True, reduction=None) -> torch.Tensor:
+    # calculate mean squared loss, but times weight
+    mse = (input - target).pow(2)
+    if weight is not None:
+        mse *= weight
+    if reduce:
+        return mse.mean()
+    else:
+        return mse
+
+
 loss_fn_mapping = {
     "mse_loss": mse_loss,
+    "mse_loss_weighted": mse_loss_weighted,
     "l1_loss": l1_loss,
     "binary_cross_entropy": binary_cross_entropy,
     "cross_entropy": cross_entropy,
@@ -580,7 +748,11 @@ loss_fn_mapping = {
     "combined_loss": combined_loss,
     "weighted_combined_loss": WeightedCombinedLoss,
     "weighted_loss": WeightedLoss2,
+    "weighted_loss_betabinomial": WeightedLoss3,
+    "gaussian_loss": gaussian_loss,
     "weighted_loss_pretrain": WeightedLoss1,   
+    "regression_weighted_loss": RegressionWeightedLoss,
+    "GP_loss": GPLoss,
 }
 
 

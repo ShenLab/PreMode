@@ -1,3 +1,4 @@
+library(ggplot2)
 ICC <- read.csv('~/Data/DMS/Itan.CKB.Cancer/ALL.csv', row.names = 1)
 # remove unwanted variants
 to.del <- readRDS("~/Data/DMS/Itan.CKB.Cancer/to.del.conflict.with.chps.RDS")
@@ -8,17 +9,61 @@ ion.channel$unique.id <- paste(ion.channel$uniprotID, ion.channel$ref, ion.chann
 ICC <- ICC[!ICC$unique.id %in% ion.channel$unique.id,]
 ALL <- dplyr::bind_rows(ICC, ion.channel)
 
+# add benign
+source('/share/vault/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
 # Ion_channel <- read.csv('~/Data/DMS/')
 # check the sse and rsa
-source('~/Pipeline/uniprot.table.add.annotation.R')
-ALL <- uniprot.table.add.annotation.parallel(ALL, 'dssp')
+ALL <- read.csv('figs/ALL.csv', row.names = 1, na.strings = c(".", "NA"))
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'dssp')
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'dbnsfp')
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'Itan')
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'EVE')
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'AlphaMissense')
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'gMVP')
+# ALL <- uniprot.table.add.annotation.parallel(ALL, 'RosettaddG')
 ALL <- uniprot.table.add.annotation.parallel(ALL, 'FoldXddG')
 ALL <- uniprot.table.add.annotation.parallel(ALL, 'pLDDT')
+ALL <- uniprot.table.add.annotation.parallel(ALL, 'pLDDT.region')
+ALL <- uniprot.table.add.annotation.parallel(ALL, 'pLDDT.all')
 ALL <- uniprot.table.add.annotation.parallel(ALL, 'conservation')
+ALL <- uniprot.table.add.annotation.parallel(ALL, 'conservation.region')
+ALL <- uniprot.table.add.annotation.parallel(ALL, 'conservation.coevol')
 ALL <- uniprot.table.add.annotation.parallel(ALL, "pfam")
-ALL$LABEL[ALL$score==1] <- "GOF"
-ALL$LABEL[ALL$score==0] <- "LOF"
-write.csv(ALL, 'figs/ALL.csv')
+# compare conservation with benign
+benign <- read.csv('figs/benign.csv', row.names = 1, na.strings = c(".", "NA"))
+benign <- benign[benign$uniprotID %in% ALL$uniprotID,]
+# benign <- rbind(read.csv('~/Data/DMS/ClinVar.HGMD.PrimateAI.syn/training.csv'),
+#                 read.csv('~/Data/DMS/ClinVar.HGMD.PrimateAI.syn/testing.csv'))
+# benign <- benign[benign$score==0,]
+# benign$LABEL <- 'Benign'
+# benign <- uniprot.table.add.annotation.parallel(benign, 'conservation')
+# benign <- uniprot.table.add.annotation.parallel(benign, 'dssp')
+# benign <- uniprot.table.add.annotation.parallel(benign, 'pLDDT')
+# benign <- uniprot.table.add.annotation.parallel(benign, 'FoldXddG', njobs = 108)
+# benign <- uniprot.table.add.annotation.parallel(benign, 'RosettaddG', njobs = 108)
+# ALL$LABEL[ALL$score==1] <- "GOF"
+# ALL$LABEL[ALL$score==0] <- "LOF"
+# write.csv(ALL, 'figs/ALL.csv')
+# write.csv(benign, 'figs/benign.csv')
+# plot number of G/LoF across genes
+gene.df <- data.frame(uniprotID=unique(ALL$uniprotID),
+                      GoF=NA, LoF=NA)
+for (i in 1:dim(gene.df)[1]) {
+  gene.df$GoF[i] <- sum(ALL$score[ALL$uniprotID==gene.df$uniprotID[i]]==1)
+  gene.df$LoF[i] <- sum(ALL$score[ALL$uniprotID==gene.df$uniprotID[i]]==0)
+}
+gene.df$label <- NA
+genes.dic <- c("Q09428"="ABCC8", "P15056"="BRAF", "O00555"="CACNA1A", "P21802"="FGFR2",
+           "Q14654"="KCNJ11", "P07949"="RET", "Q99250"="SCN2A", "Q14524"="SCN5A", "P04637"="TP53")
+gene.df$label[gene.df$uniprotID %in% names(genes.dic)] <- genes.dic[gene.df$uniprotID[gene.df$uniprotID %in% names(genes.dic)]] 
+gene.df$transfer.learning <- NA
+gene.df$transfer.learning[!is.na(gene.df$label)] <- 'Selected' 
+ggplot(gene.df, aes(x=GoF, y=LoF, col=transfer.learning, label=label)) + 
+  geom_point() + ggrepel::geom_text_repel() + theme_bw() + 
+  scale_x_continuous(trans = ggallin::pseudolog10_trans, breaks = c(5, 10, 20, 30, 40, 50, 75, 100)) +
+  scale_y_continuous(trans = ggallin::pseudolog10_trans, breaks = c(5, 10, 20, 40, 60, 80, 100, 200, 400))
+ggsave('figs/02.01.GoF.LoF.gene.compare.pdf', height = 3.5, width = 5)
+
 
 p <- list()
 for (j in c(0, 1, 2)) {
@@ -91,40 +136,43 @@ for (j in c(0, 1, 2)) {
   p[[j+1]] <- p1
 }
 library(patchwork)
-p1 <- p[[2]]+p[[1]] 
+p1 <- p[[2]]+p[[1]]+plot_layout(ncol = 1)
 
 wil.stat <- wilcox.test(ALL$rsa[ALL$LABEL=="GOF"], ALL$rsa[ALL$LABEL=="LOF"])
-p2 <- ggplot(ALL, aes(x=rsa, col=LABEL)) + geom_density() +
-  theme_bw() + geom_text(data=data.frame(x=0.5, y=2, 
-                                         label=paste0("Mann-Whitney test p=", signif(wil.stat$p.value, digits = 2))),
-                         aes(x=x, y=y, label=label),
-                         col='black')
+p2 <- ggplot(rbind(ALL[,c("rsa", "LABEL")], benign[,c("rsa", "LABEL")]), aes(x=rsa, col=LABEL)) + geom_density() +
+  theme_bw() + ggpp::geom_text_npc(data=data.frame(x="middle", y="top",
+                                                   label=paste0("Mann-Whitney test G/LoF p=", signif(wil.stat$p.value, digits = 2))),
+                                   aes(npcx=x, npcy=y, label=label),
+                                   col='black')
 # ggsave('02.01.rsa.pdf', p, height = 4, width = 6)
 wil.stat <- wilcox.test(ALL$pLDDT[ALL$LABEL=="GOF"], ALL$pLDDT[ALL$LABEL=="LOF"])
-p3 <- ggplot(ALL, aes(x=pLDDT, col=LABEL)) + geom_density() + 
-  theme_bw() + geom_text(data=data.frame(x=50, y=0.025, 
-                                         label=paste0("Mann-Whitney test p=", signif(wil.stat$p.value, digits = 2))),
-                         aes(x=x, y=y, label=label),
-                         col='black')
+p3 <- ggplot(rbind(ALL[,c("pLDDT", "LABEL")], benign[,c("pLDDT", "LABEL")]), aes(x=pLDDT, col=LABEL)) + geom_density() + 
+  theme_bw() + ggpp::geom_text_npc(data=data.frame(x="middle", y="top",
+                                                   label=paste0("Mann-Whitney test G/LoF p=", signif(wil.stat$p.value, digits = 2))),
+                                   aes(npcx=x, npcy=y, label=label),
+                                   col='black')
 
 wil.stat <- wilcox.test(ALL$FoldXddG[ALL$LABEL=="GOF"], ALL$FoldXddG[ALL$LABEL=="LOF"])
-p4 <- ggplot(ALL, aes(x=FoldXddG, col=LABEL)) + geom_density() + 
-  theme_bw() + geom_text(data=data.frame(x=20, y=0.75, 
-                                         label=paste0("Mann-Whitney test p=", signif(wil.stat$p.value, digits = 2))),
-                         aes(x=x, y=y, label=label),
-                         col='black') +
+p4 <- ggplot(rbind(ALL[,c("FoldXddG", "LABEL")], 
+                   benign[,c("FoldXddG", "LABEL")]), 
+             aes(x=FoldXddG, col=LABEL)) + geom_density() + 
+  theme_bw() + ggpp::geom_text_npc(data=data.frame(x="right", y="top",
+                                                   label=paste0("Mann-Whitney test G/LoF p=", signif(wil.stat$p.value, digits = 2))),
+                                   aes(npcx=x, npcy=y, label=label),
+                                   col='black') +
   scale_x_continuous(trans = ggallin::pseudolog10_trans)
 
-wil.stat <- wilcox.test(ALL$conservation[ALL$LABEL=="GOF"], ALL$conservation[ALL$LABEL=="LOF"])
-p5 <- ggplot(ALL, aes(x=conservation, col=LABEL)) + geom_density() + 
-  theme_bw() + geom_text(data=data.frame(x=0.5, y=2, 
-                                         label=paste0("Mann-Whitney test p=", signif(wil.stat$p.value, digits = 2))),
-                         aes(x=x, y=y, label=label),
-                         col='black')
+wil.stat <- wilcox.test(ALL$conservation.entropy[ALL$LABEL=="GOF"], ALL$conservation.entropy[ALL$LABEL=="LOF"])
+p5 <- ggplot(rbind(ALL[,c('conservation.entropy', 'LABEL')], benign[,c('conservation.entropy', 'LABEL')]), 
+             aes(x=conservation.entropy, col=LABEL)) + geom_density() + 
+  theme_bw() + ggpp::geom_text_npc(data=data.frame(x="middle", y="top",
+                                                   label=paste0("Mann-Whitney test G/LoF p=", signif(wil.stat$p.value, digits = 2))),
+                                   aes(npcx=x, npcy=y, label=label),
+                                   col='black') 
 
 p <- (p3 + p4) / (p2 + p5)
 ggsave(plot = p, filename = "figs/02.01.GoF.LoF.compare.pdf", height=5, width=12)
-ggsave(plot=p1, filename = "figs/02.01.sse.compare.pdf", height = 2.5, width = 12)
+ggsave(plot=p1, filename = "figs/02.01.sse.compare.pdf", height = 5, width = 6)
 
 
 # check aa change

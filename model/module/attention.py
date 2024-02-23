@@ -6,6 +6,10 @@ from torch_geometric.utils import softmax
 from torch_scatter import scatter
 from torch_sparse import SparseTensor
 import loralib as lora
+from esm.multihead_attention import MultiheadAttention
+import math
+from torch import _dynamo
+_dynamo.config.suppress_errors = True
 # from openfold.model.triangular_multiplicative_update import (
 #     TriangleMultiplicationIncoming,
 #     TriangleMultiplicationOutgoing,
@@ -227,6 +231,796 @@ class EquivariantMultiHeadAttention(MessagePassing):
 
     def edge_update(self) -> Tensor:
         pass
+
+
+# ESM multi-head attention layer, added LoRA
+class ESMMultiheadAttention(MultiheadAttention):
+    """Multi-headed attention.
+
+    See "Attention Is All You Need" for more details.
+    """
+
+    def __init__(
+        self,
+        embed_dim,
+        num_heads,
+        kdim=None,
+        vdim=None,
+        dropout=0.0,
+        bias=True,
+        add_bias_kv: bool = False,
+        add_zero_attn: bool = False,
+        self_attention: bool = False,
+        encoder_decoder_attention: bool = False,
+        use_rotary_embeddings: bool = False,
+    ):
+        super().__init__(embed_dim, num_heads, kdim, vdim, dropout, bias, add_bias_kv, add_zero_attn, self_attention,
+                         encoder_decoder_attention, use_rotary_embeddings)
+        # change the projection to LoRA
+        self.k_proj = lora.Linear(self.kdim, embed_dim, bias=bias, r=16)
+        self.v_proj = lora.Linear(self.vdim, embed_dim, bias=bias, r=16)
+        self.q_proj = lora.Linear(embed_dim, embed_dim, bias=bias, r=16)
+        self.out_proj = lora.Linear(embed_dim, embed_dim, bias=bias, r=16)
+
+
+# original torchmd-net attention layer, add pair-wise confidence of PAE
+class EquivariantPAEMultiHeadAttention(EquivariantMultiHeadAttention):
+    """Equivariant multi-head attention layer."""
+
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        super(EquivariantPAEMultiHeadAttention, self).__init__(
+            x_channels=x_channels,
+            x_hidden_channels=x_hidden_channels,
+            vec_channels=vec_channels,
+            vec_hidden_channels=vec_hidden_channels,
+            share_kv=share_kv,
+            edge_attr_channels=edge_attr_channels,
+            distance_influence=distance_influence,
+            num_heads=num_heads,
+            activation=activation,
+            attn_activation=attn_activation,
+            cutoff_lower=cutoff_lower,
+            cutoff_upper=cutoff_upper,
+            use_lora=use_lora)
+        # we cancel the cutoff function
+        self.cutoff = None
+        # we set separate projection for distance influence
+        self.dk_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+        self.dv_dist_proj = None
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        if self.dk_dist_proj:
+            nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+            self.dk_dist_proj.bias.data.fill_(0)
+        if self.dv_dist_proj:
+            nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+            self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, vec, edge_index, w_ij, f_dist_ij, f_ij, d_ij, plddt, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        x = self.layernorm(x)
+        q = self.q_proj(x).reshape(-1, self.num_heads, self.x_head_dim)
+        v = self.v_proj(x).reshape(-1, self.num_heads,
+                                   self.x_head_dim + self.vec_head_dim * 2)
+        if self.share_kv:
+            k = v[:, :, :self.x_head_dim]
+        else:
+            k = self.k_proj(x).reshape(-1, self.num_heads, self.x_head_dim)
+
+        vec1, vec2, vec3 = torch.split(self.vec_proj(vec),
+                                       [self.vec_hidden_channels, self.vec_hidden_channels, self.vec_channels], dim=-1)
+        vec = vec.reshape(-1, 3, self.num_heads, self.vec_head_dim)
+        vec_dot = (vec1 * vec2).sum(dim=1)
+
+        dk = (
+            self.act(self.dk_proj(f_ij)).reshape(-1, self.num_heads, self.x_head_dim)
+            if self.dk_proj is not None
+            else None
+        )
+        dk_dist = (
+            self.act(self.dk_dist_proj(f_dist_ij)).reshape(-1, self.num_heads, self.x_head_dim)
+            if self.dk_dist_proj is not None
+            else None
+        )
+        dv = (
+            self.act(self.dv_proj(f_ij)).reshape(-1, self.num_heads, self.x_head_dim + self.vec_head_dim * 2)
+            if self.dv_proj is not None
+            else None
+        )
+        dv_dist = (
+            self.act(self.dv_dist_proj(f_dist_ij)).reshape(-1, self.num_heads, self.x_head_dim + self.vec_head_dim * 2)
+            if self.dv_dist_proj is not None
+            else None
+        )
+
+        # propagate_type: (q: Tensor, k: Tensor, v: Tensor, vec: Tensor, dk: Tensor, dv: Tensor, r_ij: Tensor,
+        # d_ij: Tensor)
+        x, vec, attn = self.propagate(
+            edge_index,
+            q=q,
+            k=k,
+            v=v,
+            vec=vec,
+            dk=dk,
+            dk_dist=dk_dist,
+            dv=dv,
+            dv_dist=dv_dist,
+            d_ij=d_ij,
+            w_ij=w_ij,
+            size=None,
+        )
+        x = x.reshape(-1, self.x_hidden_channels)
+        vec = vec.reshape(-1, 3, self.vec_channels)
+
+        o1, o2, o3 = torch.split(self.o_proj(
+            x), [self.vec_channels, self.x_channels, self.x_channels], dim=1)
+        dx = vec_dot * o2 * plddt.unsqueeze(1) + o3
+        dvec = vec3 * o1.unsqueeze(1) * plddt.unsqueeze(1).unsqueeze(2) + vec
+        if return_attn:
+            return dx, dvec, torch.concat((edge_index.T, attn), dim=1)
+        else:
+            return dx, dvec, None
+
+    def message(self, q_i, k_j, v_j, vec_j, dk, dk_dist, dv, dv_dist, d_ij, w_ij):
+        # attention mechanism
+        attn = (q_i * k_j)
+        if dk is not None:
+            attn += dk
+        if dk_dist is not None:
+            attn += dk_dist * w_ij.unsqueeze(1).unsqueeze(2)
+        attn = attn.sum(dim=-1)
+
+        # attention activation function
+        attn = self.attn_activation(attn)
+
+        # value pathway, add dv, but apply w_ij to dv
+        if dv is not None:
+            v_j += dv
+        if dv_dist is not None:
+            v_j += dv_dist * w_ij.unsqueeze(1).unsqueeze(2)
+        x, vec1, vec2 = torch.split(
+            v_j, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=2)
+
+        # update scalar features
+        x = x * attn.unsqueeze(2)
+        # update vector features
+        vec = vec_j * vec1.unsqueeze(1) + vec2.unsqueeze(1) * \
+            d_ij.unsqueeze(2).unsqueeze(3)
+        return x, vec, attn
+
+
+# original torchmd-net attention layer, add pair-wise confidence of PAE
+class EquivariantWeightedPAEMultiHeadAttention(EquivariantMultiHeadAttention):
+    """Equivariant multi-head attention layer."""
+
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        super(EquivariantWeightedPAEMultiHeadAttention, self).__init__(
+            x_channels=x_channels,
+            x_hidden_channels=x_hidden_channels,
+            vec_channels=vec_channels,
+            vec_hidden_channels=vec_hidden_channels,
+            share_kv=share_kv,
+            edge_attr_channels=edge_attr_channels,
+            distance_influence=distance_influence,
+            num_heads=num_heads,
+            activation=activation,
+            attn_activation=attn_activation,
+            cutoff_lower=cutoff_lower,
+            cutoff_upper=cutoff_upper,
+            use_lora=use_lora)
+        # we cancel the cutoff function
+        self.cutoff = None
+        # we set a separate weight for distance influence
+        self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.pae_weight.weight.data.fill_(-0.5)
+        self.pae_weight.bias.data.fill_(7.5)
+        # we set separate projection for distance influence
+        self.dk_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+        self.dv_dist_proj = None
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        if self.dk_dist_proj:
+            nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+            self.dk_dist_proj.bias.data.fill_(0)
+        if self.dv_dist_proj:
+            nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+            self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, vec, edge_index, w_ij, f_dist_ij, f_ij, d_ij, plddt, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        x = self.layernorm(x)
+        q = self.q_proj(x).reshape(-1, self.num_heads, self.x_head_dim)
+        v = self.v_proj(x).reshape(-1, self.num_heads,
+                                   self.x_head_dim + self.vec_head_dim * 2)
+        if self.share_kv:
+            k = v[:, :, :self.x_head_dim]
+        else:
+            k = self.k_proj(x).reshape(-1, self.num_heads, self.x_head_dim)
+
+        vec1, vec2, vec3 = torch.split(self.vec_proj(vec),
+                                       [self.vec_hidden_channels, self.vec_hidden_channels, self.vec_channels], dim=-1)
+        vec = vec.reshape(-1, 3, self.num_heads, self.vec_head_dim)
+        vec_dot = (vec1 * vec2).sum(dim=1)
+
+        dk = (
+            self.act(self.dk_proj(f_ij)).reshape(-1, self.num_heads, self.x_head_dim)
+            if self.dk_proj is not None
+            else None
+        )
+        dk_dist = (
+            self.act(self.dk_dist_proj(f_dist_ij)).reshape(-1, self.num_heads, self.x_head_dim)
+            if self.dk_dist_proj is not None
+            else None
+        )
+        dv = (
+            self.act(self.dv_proj(f_ij)).reshape(-1, self.num_heads, self.x_head_dim + self.vec_head_dim * 2)
+            if self.dv_proj is not None
+            else None
+        )
+        dv_dist = (
+            self.act(self.dv_dist_proj(f_dist_ij)).reshape(-1, self.num_heads, self.x_head_dim + self.vec_head_dim * 2)
+            if self.dv_dist_proj is not None
+            else None
+        )
+
+        # propagate_type: (q: Tensor, k: Tensor, v: Tensor, vec: Tensor, dk: Tensor, dv: Tensor, r_ij: Tensor,
+        # d_ij: Tensor)
+        x, vec, attn = self.propagate(
+            edge_index,
+            q=q,
+            k=k,
+            v=v,
+            vec=vec,
+            dk=dk,
+            dk_dist=dk_dist,
+            dv=dv,
+            dv_dist=dv_dist,
+            d_ij=d_ij,
+            w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            size=None,
+        )
+        x = x.reshape(-1, self.x_hidden_channels)
+        vec = vec.reshape(-1, 3, self.vec_channels)
+
+        o1, o2, o3 = torch.split(self.o_proj(
+            x), [self.vec_channels, self.x_channels, self.x_channels], dim=1)
+        dx = vec_dot * o2 * plddt.unsqueeze(1) + o3
+        dvec = vec3 * o1.unsqueeze(1) * plddt.unsqueeze(1).unsqueeze(2) + vec
+        if return_attn:
+            return dx, dvec, torch.concat((edge_index.T, attn), dim=1)
+        else:
+            return dx, dvec, None
+
+    def message(self, q_i, k_j, v_j, vec_j, dk, dk_dist, dv, dv_dist, d_ij, w_ij):
+        # attention mechanism
+        attn = (q_i * k_j)
+        if dk_dist is not None:
+            if dk is not None:
+                attn *= (dk + dk_dist * w_ij.unsqueeze(1).unsqueeze(2))
+            else:
+                attn *= dk_dist * w_ij
+        else:
+            if dk is not None:
+                attn *= dk
+        attn = attn.sum(dim=-1)
+
+        # attention activation function
+        attn = self.attn_activation(attn)
+
+        # value pathway, add dv, but apply w_ij to dv
+        if dv is not None:
+            v_j += dv
+        if dv_dist is not None:
+            v_j += dv_dist * w_ij.unsqueeze(1).unsqueeze(2)
+        x, vec1, vec2 = torch.split(
+            v_j, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=2)
+
+        # update scalar features
+        x = x * attn.unsqueeze(2)
+        # update vector features
+        vec = vec_j * vec1.unsqueeze(1) + vec2.unsqueeze(1) * \
+            d_ij.unsqueeze(2).unsqueeze(3)
+        return x, vec, attn
+
+
+class EquivariantPAEMultiHeadAttentionSoftMaxFullGraph(nn.Module):
+    """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        # same as EquivariantPAEMultiHeadAttentionSoftMax, but apply attention on full graph by default
+        super(EquivariantPAEMultiHeadAttentionSoftMaxFullGraph, self).__init__()
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+        self.share_kv = share_kv
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.cutoff = None
+        self.scaling = self.x_head_dim**-0.5
+        if use_lora is not None:
+            self.q_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.k_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora) if not share_kv else None
+            self.v_proj = lora.Linear(x_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            self.o_proj = lora.Linear(x_hidden_channels, x_channels * 2 + vec_channels, r=use_lora)
+            self.vec_proj = lora.Linear(vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False, r=use_lora)
+        else:
+            self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.k_proj = nn.Linear(x_channels, x_hidden_channels) if not share_kv else None
+            self.v_proj = nn.Linear(x_channels, x_hidden_channels + vec_channels * 2)
+            self.o_proj = nn.Linear(x_hidden_channels, x_channels * 2 + vec_channels)
+            self.vec_proj = nn.Linear(vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False)
+
+        self.dk_proj = None
+        self.dk_dist_proj = None
+        self.dv_proj = None
+        self.dv_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_proj = lora.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+                self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_proj = nn.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2)
+                self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        # set PAE weight as a learnable parameter, basiclly a sigmoid function
+        self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.o_proj.weight)
+        self.o_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.vec_proj.weight)
+        self.pae_weight.weight.data.fill_(-0.5)
+        self.pae_weight.bias.data.fill_(7.5)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+        if self.dk_dist_proj:
+            nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+            self.dk_dist_proj.bias.data.fill_(0)
+        if self.dv_dist_proj:
+            nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+            self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, vec, edge_index, w_ij, f_dist_ij, f_ij, d_ij, plddt, key_padding_mask, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        # edge_index is unused
+        x = self.layernorm(x)
+        q = self.q_proj(x) * self.scaling
+        v = self.v_proj(x)
+        # if self.share_kv:
+        #     k = v[:, :, :self.x_head_dim]
+        # else:
+        k = self.k_proj(x)
+
+        vec1, vec2, vec3 = torch.split(self.vec_proj(vec),
+                                       [self.vec_hidden_channels, self.vec_hidden_channels, self.vec_channels], dim=-1)
+        vec_dot = (vec1 * vec2).sum(dim=-2)
+
+        dk = self.act(self.dk_proj(f_ij)) 
+        dk_dist = self.act(self.dk_dist_proj(f_dist_ij)) 
+        dv = self.act(self.dv_proj(f_ij))  
+        dv_dist = self.act(self.dv_dist_proj(f_dist_ij)) 
+
+        # full graph attention
+        x, vec, attn = self.attention(
+            q=q,
+            k=k,
+            v=v,
+            vec=vec,
+            dk=dk,
+            dk_dist=dk_dist,
+            dv=dv,
+            dv_dist=dv_dist,
+            d_ij=d_ij,
+            w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            key_padding_mask=key_padding_mask,
+        )
+        o1, o2, o3 = torch.split(self.o_proj(x), [self.vec_channels, self.x_channels, self.x_channels], dim=-1)
+        dx = vec_dot * o2 * plddt.unsqueeze(-1) + o3
+        dvec = vec3 * o1.unsqueeze(-2) * plddt.unsqueeze(-1).unsqueeze(-2) + vec
+        # apply key_padding_mask to dx
+        dx = dx.masked_fill(key_padding_mask.unsqueeze(-1), 0)
+        dvec = dvec.masked_fill(key_padding_mask.unsqueeze(-1).unsqueeze(-1), 0)
+        if return_attn:
+            return dx, dvec, attn
+        else:
+            return dx, dvec, None
+
+    def attention(self, q, k, v, vec, dk, dk_dist, dv, dv_dist, d_ij, w_ij, key_padding_mask=None, need_head_weights=False):
+        # note that q is of shape (bsz, tgt_len, num_heads * head_dim)
+        # k, v is of shape (bsz, src_len, num_heads * head_dim)
+        # vec is of shape (bsz, src_len, 3, num_heads * head_dim)
+        # dk, dk_dist, dv, dv_dist is of shape (bsz, tgt_len, src_len, num_heads * head_dim)
+        # d_ij is of shape (bsz, tgt_len, src_len, 3)
+        # w_ij is of shape (bsz, tgt_len, src_len)
+        # key_padding_mask is of shape (bsz, src_len)
+        bsz, tgt_len, _ = q.size()
+        src_len = k.size(1)
+        # change q size to (bsz * num_heads, tgt_len, head_dim)
+        # change k,v size to (bsz * num_heads, src_len, head_dim)
+        q = q.transpose(0, 1).reshape(tgt_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        k = k.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        v = v.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).transpose(0, 1).contiguous()
+        # change vec to (bsz * num_heads, src_len, 3, head_dim)
+        vec = vec.permute(1, 2, 0, 3).reshape(src_len, 3, bsz * self.num_heads, self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dk size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dk is not None:
+        # change dk to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk = dk.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dk_dist is not None:
+        # change dk_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk_dist = dk_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dv size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dv is not None:
+        # change dv to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv = dv.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dv_dist is not None:
+        # change dv_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv_dist = dv_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if key_padding_mask is not None:
+        # key_padding_mask should be (bsz, src_len)
+        assert key_padding_mask.size(0) == bsz
+        assert key_padding_mask.size(1) == src_len
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len, head_dim)
+        attn_weights = torch.multiply(q[:, :, None, :], k[:, None, :, :])
+        # w_ij is PAE confidence
+        # w_ij size is (bsz, tgt_len, src_len)
+        # change dimension of w_ij to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # if dk_dist is not None:
+        assert w_ij is not None
+        w_ij = w_ij[:, :, :, None].repeat(self.num_heads, 1, 1, self.x_head_dim)
+        #     if dk is not None:
+        attn_weights *= (dk + dk_dist * w_ij)
+        #     else:
+        #         attn_weights *= dk_dist * w_ij
+        # else:
+        #     if dk is not None:
+        #         attn_weights *= dk
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.sum(dim=-1)
+        # apply key_padding_mask to attn_weights
+        # if key_padding_mask is not None:
+        # don't attend to padding symbols
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).contiguous()
+        attn_weights = attn_weights.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool), float("-inf")
+        )
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len).contiguous()
+        # apply softmax to attn_weights
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        # x, vec1, vec2 are of shape (bsz * num_heads, src_len, head_dim)
+        x, vec1, vec2 = torch.split(v, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=2)
+        # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
+        x_out = torch.bmm(attn_weights, x)
+        # next get equivariant feature outputs vec_out_1, size is (bsz * num_heads, src_len, 3, head_dim)
+        vec_out_1 = vec * vec1.unsqueeze(2)
+        # next get equivariant feature outputs vec_out_2, size is (bsz * num_heads, tgt_len, src_len, 3, head_dim)
+        vec_out_2 = vec2[:, None, :, None, :] * d_ij.unsqueeze(4).repeat(self.num_heads, 1, 1, 1, self.vec_head_dim)
+        # apply attention to vec_out_1, get vec_out_1, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        vec_out_1 = torch.einsum('bts,bsih->btih', attn_weights, vec_out_1)
+        # apply attention to vec_out_2, get vec_out_2, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        vec_out_2 = (attn_weights[:, :, :, None, None] * vec_out_2).sum(dim=2)
+        # adds up vec_out_1 and vec_out_2, get vec_out, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        vec_out = vec_out_1 + vec_out_2
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+        # if not need_head_weights:
+        # average attention weights over heads
+        attn_weights = attn_weights.mean(dim=0)
+        # reshape x_out to (bsz, tgt_len, num_heads * head_dim)
+        x_out = x_out.transpose(1, 0).reshape(tgt_len, bsz, self.num_heads * self.x_head_dim).transpose(1, 0).contiguous()
+        # reshape vec_out to (bsz, tgt_len, 3, num_heads * head_dim)
+        vec_out = vec_out.permute(1, 2, 0, 3).reshape(tgt_len, 3, bsz, self.num_heads * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        return x_out, vec_out, attn_weights
+
+
+class PAEMultiHeadAttentionSoftMaxStarGraph(nn.Module):
+    """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        # same as EquivariantPAEMultiHeadAttentionSoftMax, but apply attention on full graph by default
+        super(PAEMultiHeadAttentionSoftMaxStarGraph, self).__init__()
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+        self.share_kv = share_kv
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.cutoff = None
+        self.scaling = self.x_head_dim**-0.5
+        if use_lora is not None:
+            self.q_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.k_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora) if not share_kv else None
+            self.v_proj = lora.Linear(x_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+        else:
+            self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.k_proj = nn.Linear(x_channels, x_hidden_channels) if not share_kv else None
+            self.v_proj = nn.Linear(x_channels, x_hidden_channels)
+
+        self.dk_proj = None
+        self.dk_dist_proj = None
+        self.dv_proj = None
+        self.dv_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_proj = lora.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+                self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_proj = nn.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2)
+                self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        # set PAE weight as a learnable parameter, basiclly a sigmoid function
+        self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        self.pae_weight.weight.data.fill_(-0.5)
+        self.pae_weight.bias.data.fill_(7.5)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+        if self.dk_dist_proj:
+            nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+            self.dk_dist_proj.bias.data.fill_(0)
+        if self.dv_dist_proj:
+            nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+            self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, x_center_index, w_ij, f_dist_ij, f_ij, key_padding_mask, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        # edge_index is unused
+        x = self.layernorm(x)
+        q = self.q_proj(x[x_center_index].unsqueeze(1)) * self.scaling
+        v = self.v_proj(x)
+        # if self.share_kv:
+        #     k = v[:, :, :self.x_head_dim]
+        # else:
+        k = self.k_proj(x)
+
+        dk = self.act(self.dk_proj(f_ij)) 
+        dk_dist = self.act(self.dk_dist_proj(f_dist_ij)) 
+        dv = self.act(self.dv_proj(f_ij)) 
+        dv_dist = self.act(self.dv_dist_proj(f_dist_ij)) 
+
+        # full graph attention
+        x, attn = self.attention(
+            q=q,
+            k=k,
+            v=v,
+            dk=dk,
+            dk_dist=dk_dist,
+            dv=dv,
+            dv_dist=dv_dist,
+            w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            key_padding_mask=key_padding_mask,
+        )
+        if return_attn:
+            return x, attn
+        else:
+            return x, None
+
+    def attention(self, q, k, v, dk, dk_dist, dv, dv_dist, w_ij, key_padding_mask=None, need_head_weights=False):
+        # note that q is of shape (bsz, tgt_len, num_heads * head_dim)
+        # k, v is of shape (bsz, src_len, num_heads * head_dim)
+        # vec is of shape (bsz, src_len, 3, num_heads * head_dim)
+        # dk, dk_dist, dv, dv_dist is of shape (bsz, tgt_len, src_len, num_heads * head_dim)
+        # d_ij is of shape (bsz, tgt_len, src_len, 3)
+        # w_ij is of shape (bsz, tgt_len, src_len)
+        # key_padding_mask is of shape (bsz, src_len)
+        bsz, tgt_len, _ = q.size()
+        src_len = k.size(1)
+        # change q size to (bsz * num_heads, tgt_len, head_dim)
+        # change k,v size to (bsz * num_heads, src_len, head_dim)
+        q = q.transpose(0, 1).reshape(tgt_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        k = k.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        v = v.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        # dk size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dk is not None:
+        # change dk to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk = dk.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dk_dist is not None:
+        # change dk_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk_dist = dk_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dv size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dv is not None:
+        # change dv to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv = dv.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dv_dist is not None:
+        # change dv_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv_dist = dv_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if key_padding_mask is not None:
+        # key_padding_mask should be (bsz, src_len)
+        assert key_padding_mask.size(0) == bsz
+        assert key_padding_mask.size(1) == src_len
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len, head_dim)
+        attn_weights = torch.multiply(q[:, :, None, :], k[:, None, :, :])
+        # w_ij is PAE confidence
+        # w_ij size is (bsz, tgt_len, src_len)
+        # change dimension of w_ij to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # if dk_dist is not None:
+        assert w_ij is not None
+        w_ij = w_ij[:, :, :, None].repeat(self.num_heads, 1, 1, self.x_head_dim)
+        #     if dk is not None:
+        attn_weights *= (dk + dk_dist * w_ij)
+        #     else:
+        #         attn_weights *= dk_dist * w_ij
+        # else:
+        #     if dk is not None:
+        #         attn_weights *= dk
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.sum(dim=-1)
+        # apply key_padding_mask to attn_weights
+        # if key_padding_mask is not None:
+        # don't attend to padding symbols
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).contiguous()
+        attn_weights = attn_weights.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool), float("-inf")
+        )
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len).contiguous()
+        # apply softmax to attn_weights
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
+        x_out = torch.bmm(attn_weights, v)
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+        # if not need_head_weights:
+        # average attention weights over heads
+        attn_weights = attn_weights.mean(dim=0)
+        # reshape x_out to (bsz, tgt_len, num_heads * head_dim)
+        x_out = x_out.transpose(1, 0).reshape(tgt_len, bsz, self.num_heads * self.x_head_dim).transpose(1, 0).contiguous()
+        return x_out, attn_weights
 
 
 # original torchmd-net attention layer, let k, v share the same projection
@@ -477,6 +1271,149 @@ class EquivariantMultiHeadAttentionSoftMax(EquivariantMultiHeadAttention):
         return x, vec, attn
 
 
+# softmax version of torchmd-net attention layer, add pair-wise confidence of PAE
+class EquivariantPAEMultiHeadAttentionSoftMax(EquivariantPAEMultiHeadAttention):
+    """Equivariant multi-head attention layer with softmax"""
+
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        super(EquivariantPAEMultiHeadAttentionSoftMax, self).__init__(
+            x_channels=x_channels,
+            x_hidden_channels=x_hidden_channels,
+            vec_channels=vec_channels,
+            vec_hidden_channels=vec_hidden_channels,
+            share_kv=share_kv,
+            edge_attr_channels=edge_attr_channels,
+            edge_attr_dist_channels=edge_attr_dist_channels,
+            distance_influence=distance_influence,
+            num_heads=num_heads,
+            activation=activation,
+            attn_activation=attn_activation,
+            cutoff_lower=cutoff_lower,
+            cutoff_upper=cutoff_upper,
+            use_lora=use_lora)
+        self.attn_activation = nn.LeakyReLU(0.2)
+
+    def message(self, q_i, k_j, v_j, vec_j, dk, dk_dist, dv, dv_dist, d_ij, w_ij,
+                index: Tensor,
+                ptr: Optional[Tensor],
+                size_i: Optional[int]):
+        # attention mechanism
+        attn = (q_i * k_j)
+        if dk is not None:
+            attn += dk
+        if dk_dist is not None:
+            attn += dk_dist * w_ij.unsqueeze(1).unsqueeze(2)
+        attn = attn.sum(dim=-1)
+        # attention activation function
+        attn = self.attn_activation(attn)
+        attn = softmax(attn, index, ptr, size_i)
+        # TODO: consider drop out attn or not.
+        # attn = F.dropout(attn, p=self.dropout, training=self.training)
+        # value pathway
+        if dv is not None:
+            v_j += dv
+        if dv_dist is not None:
+            v_j += dv_dist * w_ij.unsqueeze(1).unsqueeze(2)
+        x, vec1, vec2 = torch.split(
+            v_j, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=2)
+
+        # update scalar features
+        x = x * attn.unsqueeze(2)
+        # update vector features
+        vec = (vec1.unsqueeze(1) * vec_j + vec2.unsqueeze(1) * d_ij.unsqueeze(2).unsqueeze(3)) \
+            * attn.unsqueeze(1).unsqueeze(3)
+        return x, vec, attn
+
+# softmax version of torchmd-net attention layer, add pair-wise confidence of PAE
+class EquivariantWeightedPAEMultiHeadAttentionSoftMax(EquivariantWeightedPAEMultiHeadAttention):
+    """Equivariant multi-head attention layer with softmax"""
+
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        super(EquivariantWeightedPAEMultiHeadAttentionSoftMax, self).__init__(
+            x_channels=x_channels,
+            x_hidden_channels=x_hidden_channels,
+            vec_channels=vec_channels,
+            vec_hidden_channels=vec_hidden_channels,
+            share_kv=share_kv,
+            edge_attr_channels=edge_attr_channels,
+            edge_attr_dist_channels=edge_attr_dist_channels,
+            distance_influence=distance_influence,
+            num_heads=num_heads,
+            activation=activation,
+            attn_activation=attn_activation,
+            cutoff_lower=cutoff_lower,
+            cutoff_upper=cutoff_upper,
+            use_lora=use_lora)
+        self.attn_activation = nn.LeakyReLU(0.2)
+
+    def message(self, q_i, k_j, v_j, vec_j, dk, dk_dist, dv, dv_dist, d_ij, w_ij,
+                index: Tensor,
+                ptr: Optional[Tensor],
+                size_i: Optional[int]):
+        # attention mechanism
+        attn = (q_i * k_j)
+        if dk_dist is not None:
+            if dk is not None:
+                attn *= (dk + dk_dist * w_ij.unsqueeze(1).unsqueeze(2))
+            else:
+                attn *= dk_dist * w_ij
+        else:
+            if dk is not None:
+                attn *= dk
+        attn = attn.sum(dim=-1)
+        # attention activation function
+        attn = self.attn_activation(attn)
+        attn = softmax(attn, index, ptr, size_i)
+        # TODO: consider drop out attn or not.
+        # attn = F.dropout(attn, p=self.dropout, training=self.training)
+        # value pathway
+        if dv is not None:
+            v_j += dv
+        if dv_dist is not None:
+            v_j += dv_dist * w_ij.unsqueeze(1).unsqueeze(2)
+        x, vec1, vec2 = torch.split(
+            v_j, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=2)
+
+        # update scalar features
+        x = x * attn.unsqueeze(2)
+        # update vector features
+        vec = (vec1.unsqueeze(1) * vec_j + vec2.unsqueeze(1) * d_ij.unsqueeze(2).unsqueeze(3)) \
+            * attn.unsqueeze(1).unsqueeze(3)
+        return x, vec, attn
+
+
 # MSA encoder adapted from gMVP
 class MSAEncoder(nn.Module):
     def __init__(self, num_species, pairwise_type, weighting_schema):
@@ -514,7 +1451,7 @@ class MSAEncoder(nn.Module):
         A = 21 # number of amino acids 
         x = x[:, :self.num_species]
         if self.weighting_schema == 'spe':
-            sm = torch.nn.Softmax()
+            sm = torch.nn.Softmax(dim=-1)
             W = sm(self.W)
         else:
             W = self.W
@@ -531,6 +1468,7 @@ class MSAEncoder(nn.Module):
             x2 = (W[:, :, None, None] * x2).sum(dim=1) # E x A x A
             x2_t = x1[edge_index[0], 0, :, None] * x1[edge_index[1], 0, None, :] # E x A x A
             x2 = (x2 - x2_t).reshape(E, A * A) # E x (A x A)
+            x2 = x2.reshape(E, A * A) # E x (A x A)
             norm = torch.sqrt(torch.sum(torch.square(x2), dim=-1, keepdim=True) + 1e-12)
             x2 = torch.cat([x2, norm], dim=-1) # E x (A x A + 1)
         elif self.pairwise_type == 'cov_all':
@@ -547,6 +1485,70 @@ class MSAEncoder(nn.Module):
 
         x1 = torch.squeeze(x1, dim=1) # L x A
 
+        return x1, x2
+
+
+# MSA encoder adapted from gMVP
+class MSAEncoderFullGraph(nn.Module):
+    def __init__(self, num_species, pairwise_type, weighting_schema):
+        """[summary]
+
+        Args:
+            num_species (int): Number of species to use from MSA. [1,200] // 200 used in default gMVP
+            pairwise_type ([str]): method for calculating pairwise coevolution. only "cov" supported
+            weighting_schema ([str]): species weighting type; "spe" -> use dense layer to weight speices 
+                                        "none" -> uniformly weight species 
+
+        Raises:
+            NotImplementedError: [description]
+        """        
+        super(MSAEncoderFullGraph, self).__init__()
+        self.num_species = num_species
+        self.pairwise_type = pairwise_type
+        self.weighting_schema = weighting_schema
+        if self.weighting_schema == 'spe':
+            self.W = nn.parameter.Parameter(
+                torch.zeros((num_species)), 
+                requires_grad=True)
+
+        elif self.weighting_schema  == 'none':
+            self.W = torch.tensor(1.0 / self.num_species).repeat(self.num_species)
+        else:
+            raise NotImplementedError
+       
+    def forward(self, x):
+        # x: B batch size x L lenth x N num_species
+        shape  = x.shape
+        B, L, N = shape[0], shape[1], shape[2]
+        A = 21 # number of amino acids 
+        x = x[:, :, :self.num_species]
+        if self.weighting_schema == 'spe':
+            W = torch.nn.functional.softmax(self.W, dim=-1)
+        else:
+            W = self.W
+        x = nn.functional.one_hot(x.type(torch.int64), A).type(torch.float32) # B x L x N x A
+        x1 = torch.einsum('blna,n->bla', x, W) # B x L x A
+
+        if self.pairwise_type == 'cov':
+            #numerical stability
+            # x2 = torch.einsum('bLnA,blna,n->bLlAa', x, x, W) # B x L x L x A x A, check if ram supports this
+            # x2_t = x1[:, :, None, :, None] * x1[:, None, :, None, :] # B x L x L x A x A
+            # x2 = (x2 - x2_t).reshape(B, L, L, A * A) # B x L x L x (A x A)
+            # complete that in one line to save memory
+            x2 = (torch.einsum('bLnA,blna,n->bLlAa', x, x, W) - x1[:, :, None, :, None] * x1[:, None, :, None, :]).reshape(B, L, L, A * A)
+            norm = torch.sqrt(torch.sum(torch.square(x2), dim=-1, keepdim=True) + 1e-12) # B x L x L x 1
+            x2 = torch.cat([x2, norm], dim=-1) # B x L x L x (A x A + 1)
+        elif self.pairwise_type == 'cov_all':
+            print('cov_all not implemented in EvolEncoder2')
+            raise NotImplementedError
+        elif self.pairwise_type == 'inv_cov':
+            print('in_cov not implemented in EvolEncoder2')
+            raise NotImplementedError
+        elif self.pairwise_type == 'none':
+            x2 = None
+        else:
+            raise NotImplementedError(
+                f'pairwise_type {self.pairwise_type} not implemented')
         return x1, x2
 
 
@@ -1385,7 +2387,7 @@ class EquivariantTriAngularStarMultiHeadAttention(MessagePassing):
         # x itself is q, k and v
         q = self.q_proj(residue).reshape(-1, self.num_heads, self.x_head_dim)
         kv = self.kv_proj(x[other_nodes]).reshape(-1, self.num_heads, self.x_head_dim)
-        qkv = torch.zeros(x.shape[0], self.num_heads, self.x_head_dim).to(x.device)
+        qkv = torch.zeros(x.shape[0], self.num_heads, self.x_head_dim).to(x.device, non_blocking=True)
         qkv[center_nodes] = q
         qkv[other_nodes] = kv
         # point ettr to edge_attr
@@ -1597,7 +2599,7 @@ class EquivariantTriAngularStarDropMultiHeadAttention(MessagePassing):
         # x itself is q, k and v
         q = self.q_proj(residue).reshape(-1, self.num_heads, self.x_head_dim)
         kv = self.kv_proj(x[other_nodes]).reshape(-1, self.num_heads, self.x_head_dim)
-        qkv = torch.zeros(x.shape[0], self.num_heads, self.x_head_dim).to(x.device)
+        qkv = torch.zeros(x.shape[0], self.num_heads, self.x_head_dim).to(x.device, non_blocking=True)
         qkv[center_nodes] = q
         qkv[other_nodes] = kv
         # point ettr to edge_attr
@@ -1720,7 +2722,7 @@ class PairFeatureNet(nn.Module):
         d = r[:, :, None] - r[:, None, :]
 
         # [n_bin]
-        v = torch.arange(-self.relpos_k, self.relpos_k + 1).to(r.device)
+        v = torch.arange(-self.relpos_k, self.relpos_k + 1).to(r.device, non_blocking=True)
 
         # [1, 1, 1, n_bin]
         v_reshaped = v.view(*((1,) * len(d.shape) + (len(v),)))

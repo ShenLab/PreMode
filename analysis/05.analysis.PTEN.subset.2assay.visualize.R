@@ -7,7 +7,7 @@ genes <- c("P60484")
 # original <- rbind(read.csv('~/Data/DMS/MAVEDB/PTEN.bin/train.seed.0.csv'),
 #                   read.csv('~/Data/DMS/MAVEDB/PTEN.bin/test.seed.0.csv'))
 
-af2.seqs <- read.csv('~/Data/Protein/alphafold2_v4/swissprot_and_human.full.seq.csv', row.names = 1)
+af2.seqs <- read.csv('~/Data/af2_uniprot/swissprot_and_human.csv', row.names = 1)
 aa.dict <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
              'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
 log.dir <- '5genes.all.mut/CHPs.v4.esm.torchmdnet.small.TriAttn.StarPool.1dim/'
@@ -25,11 +25,13 @@ for (gene in genes) {
     secondary.df <- dplyr::bind_rows(secondary.df, sec.df)
   }
   #plot the AF2 predicted secondary.df and rsa
-  gene.af2.file <- paste0("~/Data/Protein/alphafold2_v4/swissprot/AF-",
+  gene.af2.file <- paste0("~/Data/af2_uniprot/alphafold2_v4/AF-",
                           gene, '-F', 1,
                           '-model_v4.pdb.gz')
   dssp.res <- dssp(read.pdb(gene.af2.file), 
                    exefile='/share/vault/Users/gz2294/miniconda3/bin/mkdssp')
+  pdb.res <- read.pdb(gene.af2.file)
+  plddt.res <- pdb.res$atom$b[pdb.res$calpha]
   af2.secondary <- rbind(cbind(as.data.frame(dssp.res$helix)[,1:4], type="HELIX"), 
                          cbind(as.data.frame(dssp.res$sheet), type="STRAND"), 
                          cbind(as.data.frame(dssp.res$turn), type="TURN"))
@@ -41,10 +43,12 @@ for (gene in genes) {
   }
   rsa.df <- data.frame(pos.orig=1:length(dssp.res$acc), alt = ".anno_af2_rsa", 
                        ANNO_RSA=(dssp.res$acc)/max(dssp.res$acc))
+  plddt.df <- data.frame(pos.orig=1:length(plddt.res), alt = ".anno_af2_pLDDT", 
+                         ANNO_pLDDT=plddt.res)
   #plot the domain types that only have one row of description
   others <- prot_data[prot_data$description != "NONE",]
   others <- others[!others$type %in% c("VARIANT", "MUTAGEN", "CONFLICT", "VAR_SEQ", "CHAIN"),]
-  others$type[others$type=="MOD_RES"] <- "Phosphotyrosine"
+  others$type[others$type=="MOD_RES"] <- "post transl. mod."
   others$type[others$type=="DOMAIN"] <- others$description[others$type=="DOMAIN"]
   others$type <- tolower(others$type)
   unique.df <- data.frame()
@@ -109,7 +113,7 @@ for (gene in genes) {
       ps[[j]] <- ggplot() +
         geom_tile(data=gene.result, aes_string(x="pos.orig", y="alt", fill=col.to.plot[j])) + 
         scale_fill_gradientn(colors = c("light blue", "white", "pink"), na.value = 'grey') + labs(fill=col.to.plot[j]) +
-        scale_x_continuous(breaks=seq(0, nchar(gene.seq), 50)) +
+        scale_x_continuous(breaks=seq(0, nchar(gene.seq), 50), minor_breaks = seq(0, nchar(gene.seq), 10)) +
         ggnewscale::new_scale_fill() +
         geom_tile(data=data.train[[j]], aes_string(x="pos.orig", y="alt", fill=score.to.plot[j])) +
         scale_fill_gradientn(colors = c("blue", "white", "red")) +
@@ -150,13 +154,20 @@ for (gene in genes) {
       }
       ps[[j]] <- ggplot() +
         geom_tile(data=gene.result, aes_string(x="pos.orig", y="alt", fill=col.to.plot[j])) + labs(fill=col.to.plot[j]) +
-        scale_fill_gradientn(colors = c("light blue", "white", "pink"), na.value = 'grey') +
-        scale_x_continuous(breaks=seq(0, nchar(gene.seq), 50)) + labs(fill=score.name[j]) +
+        scale_fill_gradientn(colors = c("light blue", "white", "pink"), na.value = 'grey', 
+                             values = c(0, (0-min(gene.result[,col.to.plot[j]], na.rm = T))/(max(gene.result[,col.to.plot[j]], na.rm = T)-min(gene.result[,col.to.plot[j]], na.rm = T)), 1)) +
+        scale_x_continuous(breaks=seq(0, nchar(gene.seq), 50), minor_breaks = seq(0, nchar(gene.seq), 10)) + labs(fill=score.name[j]) +
         ggnewscale::new_scale_fill() +
         geom_tile(data=all.training.to.plot.plot, aes_string(x="pos.orig", y="alt", fill=score.to.plot[j], width=1, height=1)) +
         scale_fill_gradientn(colors = c("blue", "white", "red"), limits = c(0,1)) +
         ggnewscale::new_scale_fill() +
         geom_tile(data=secondary.df.to.plot, aes(x=pos.orig, y=alt, fill=ANNO_secondary, width=1, height=1)) +
+        ggnewscale::new_scale_fill() +
+        geom_tile(data=rsa.df, aes(x=pos.orig, y=alt, fill=ANNO_RSA, width=1, height=1)) +
+        scale_fill_gradientn(colors = c("grey", "blue")) +
+        ggnewscale::new_scale_fill() +
+        geom_tile(data=plddt.df, aes(x=pos.orig, y=alt, fill=ANNO_pLDDT, width=1, height=1)) +
+        scale_fill_gradientn(colors = c("orange", "yellow", "lightblue", "blue")) +
         ggnewscale::new_scale_fill() +
         geom_tile(data=unique.df.to.plot, aes(x=pos.orig, y=alt, fill=ANNO_domain_type, width=1, height=1),show.legend = F) +
         ggnewscale::new_scale_fill() +
@@ -167,8 +178,8 @@ for (gene in genes) {
     p <- ps[[1]] + ps[[2]] + ps[[3]] + ps[[4]] + plot_layout(nrow=4)
     # ggsave(paste0(log.dir, gene, '.', xlower, '-', xupper, '.pdf'), p, width = min(nchar(gene.seq)/70*2, 49.9), height = 10)
     ggsave(paste0(log.dir, gene, '.subset.', subset, '.fold.', fold, '.pdf'), p, width = max(25, min(nchar(gene.seq)/70, 49.9)), height = 20)
-    p <- ps[[1]] + ps[[4]] + plot_layout(nrow=2)
+    p <- ps[[4]] 
     # ggsave(paste0(log.dir, gene, '.', xlower, '-', xupper, '.pdf'), p, width = min(nchar(gene.seq)/70*2, 49.9), height = 10)
-    ggsave(paste0(log.dir, gene, '.subset.', subset, '.fold.', fold, '.part.pdf'), p, width = max(25, min(nchar(gene.seq)/70, 49.9)), height = 10)
+    ggsave(paste0(log.dir, gene, '.subset.', subset, '.fold.', fold, '.part.pdf'), p, width = max(25, min(nchar(gene.seq)/70, 49.9)), height = 5)
   }
 }
