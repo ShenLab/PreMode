@@ -33,6 +33,7 @@ nworkers=$(cat $1/pretrain.seed.0.yaml | grep num_workers | sed 's/.*: //' | sed
 target_nworkers=0
 batch_size=$(cat $1/pretrain.seed.0.yaml | grep batch_size | sed 's/.*: //' | sed 's/ #.*//g')
 echo "loss_fn was: "$loss_fn
+changed_data=false
 if grep -q "clinvar*.4.splits/" $1/pretrain.seed.0.yaml; then
     echo "modify data-file-train in original yaml"
     if [ ! -f $1/pretrain.seed.0.yaml.bak ]; then
@@ -42,8 +43,6 @@ if grep -q "clinvar*.4.splits/" $1/pretrain.seed.0.yaml; then
     echo "data_prefix was: "$data_prefix
     sed -i "s|"$data_prefix"/||g" $1/pretrain.seed.0.yaml
     changed_data=true
-else
-    changed_data=false
 fi
 if grep -q "v5/" $1/pretrain.seed.0.yaml; then
     echo "modify data-file-train in original yaml"
@@ -54,10 +53,8 @@ if grep -q "v5/" $1/pretrain.seed.0.yaml; then
     echo "data_prefix was: "$data_prefix
     sed -i "s|"$data_prefix"/||g" $1/pretrain.seed.0.yaml
     changed_data=true
-else
-    changed_data=false
 fi
-if grep -q "pascal/" $1/pretrain.seed.0.yaml; then
+if grep -q "/share/pascal/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/" $1/pretrain.seed.0.yaml; then
     echo "modify data-file-train in original yaml"
     if [ ! -f $1/pretrain.seed.0.yaml.bak ]; then
         cp $1/pretrain.seed.0.yaml $1/pretrain.seed.0.yaml.bak
@@ -67,8 +64,6 @@ if grep -q "pascal/" $1/pretrain.seed.0.yaml; then
     echo "data_prefix was: "$data_prefix
     sed -i "s|"$data_prefix"|"$data_prefix_new"|g" $1/pretrain.seed.0.yaml
     changed_data=true
-else
-    changed_data=false
 fi
 if grep -q "_by_anno" $1/pretrain.seed.0.yaml; then
     echo "modify data-file-train in original yaml"
@@ -77,8 +72,6 @@ if grep -q "_by_anno" $1/pretrain.seed.0.yaml; then
     fi
     sed -i 's|_by_anno|""|g' $1/pretrain.seed.0.yaml
     changed_data=true
-else
-    changed_data=false
 fi
 if grep -q "PrimateAI.Random.ESM" $1/pretrain.seed.0.yaml; then
     echo "modify data-file-train in original yaml"
@@ -93,8 +86,6 @@ if grep -q "PrimateAI.Random.ESM" $1/pretrain.seed.0.yaml; then
     data_prefix=$(cat $1/pretrain.seed.0.yaml | grep data_file_train: | sed 's/.*: //' | sed 's/training.csv//' | sed 's/.*DMS\///')
     echo "data_prefix was: "$data_prefix
     sed -i "s|"$data_prefix"|ClinVar.HGMD.PrimateAI.syn/|g" $1/pretrain.seed.0.yaml
-else
-    changed_data=false
 fi
 # prepare yaml files for all tasks
 for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 VKORC1 SNCA CYP2C9 GCK ASPA DDX3X Stab MPL MPL.Position $(cat scripts/pfams.txt) $(cat scripts/gene.pfams.txt) AAV GB1 B_LAC fluorescence $(cat /share/pascal/Users/gz2294/Data/DMS/Hsu_NBT/useful.data.csv)
@@ -368,6 +359,7 @@ do
   done
 done
 
+echo $changed_data
 if [ $changed_data = true ]; then
   echo "change data-file-train back to original yaml"
   mv $1/pretrain.seed.0.yaml.bak $1/pretrain.seed.0.yaml

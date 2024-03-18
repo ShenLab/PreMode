@@ -1,5 +1,0 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-nohup bash scripts/DMS.5fold.run.sh $1 P15056.IPR001245.self,P15056.IPR001245.IPR001245,Q99250.IPR005821.IPR005821 0 > $2.log.0.txt &
-nohup bash scripts/DMS.5fold.run.sh $1 P21802.IPR016248.self,P21802.IPR016248.IPR016248,Q14524.IPR005821.IPR005821 1 > $2.log.1.txt &
-nohup bash scripts/DMS.5fold.run.sh $1 Q99250.IPR005821.self,Q14524.IPR005821.self,Q14524.IPR027359.IPR027359 2 > $2.log.2.txt &
-nohup bash scripts/DMS.5fold.run.sh $1 Q14524.IPR027359.self,Q99250.heyne.IPR005821.self,Q99250.heyne.IPR005821.IPR005821 3 > $2.log.3.txt &
