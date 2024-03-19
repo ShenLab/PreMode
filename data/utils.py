@@ -10,6 +10,7 @@ import random
 import biotite.structure
 import numpy as np
 import pandas as pd
+import socket
 import torch
 from Bio.PDB import PDBParser
 from Bio.PDB.DSSP import DSSP
@@ -21,32 +22,34 @@ from biotite.structure.residues import get_residues
 from torch_cluster import radius_graph, knn_graph
 
 # Path to the AF2 data
-AF2_DATA_PATH = '/share/pascal/Users/gz2294/Data/af2_uniprot/alphafold2_v4'
-AF2_REP_DATA_PATH = '/euler/Users/gz2294/openfold/human'
-AF2_SEQ_DICT = pd.read_csv('/share/pascal/Users/gz2294/Data/af2_uniprot/swissprot_and_human.csv',
-                           index_col=0, low_memory=False).set_index('file_name').T.to_dict()
+AF2_DATA_PATH = './data.files/af2.files/'
+# unused in this version
+AF2_REP_DATA_PATH = "NA"
+# AF2_SEQ_DICT = pd.read_csv('/share/pascal/Users/gz2294/Data/af2_uniprot/swissprot_and_human.csv',
+#                            index_col=0, low_memory=False).set_index('file_name').T.to_dict()
 # Path to the AF2 data
 ESM_MODEL_SIZE = '650M'
-ESM_DATA_PATH = f'/share/vault/Users/gz2294/Data/DMS/ClinVar.HGMD.PrimateAI.syn/esm2.{ESM_MODEL_SIZE}.embedding.uniprotIDs/'
+ESM_DATA_PATH = f'./data.files/esm.files/'
 # Path to the ESM2 data
-MSA_DATA_PATH_ARCHIVE = '/share/pascal/Projects/gMVP/combined_feature_2021_v2/'
-MSA_DATA_PATH = '/share/pascal/Users/gz2294/Data/Protein/MSA/'
-PAE_DATA_PATH = '/share/vault/Users/gz2294/Data/af2_uniprot/alphafold2_v4_PAE/'
+MSA_DATA_PATH_ARCHIVE = './data.files/gMVP.MSA/'
+MSA_DATA_PATH = './data.files/MSA/'
+# unused in this version
+PAE_DATA_PATH = 'NA'
 # Path to the ESM_MSA data
 # TODO: update the path
-MSA_ATTN_DATA_PATH = '/share/pascal/Users/gz2294/Data/gMVP.esm.MSA/'
+MSA_ATTN_DATA_PATH = './data.files/esm.MSA/'
 NUM_THREADS = 42
 # prepare esm2 embeddings
-with open(f'/share/vault/Users/gz2294/PreMode/utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'./utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     LANGUAGE_MODEL = pickle.load(f)
-with open(f'/share/vault/Users/gz2294/PreMode/utils/ALPHABET_CONVERTER.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'./utils/ALPHABET_CONVERTER.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     ALPHABET_CONVERTER = pickle.load(f)
-with open(f'/share/vault/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
+with open(f'./utils/ESM_AA_EMBEDDING_DICT.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     ESM_AA_EMBEDDING_DICT = pickle.load(f)
-with open(f'/share/vault/Users/gz2294/PreMode/utils/ESM_AA_EMBEDDING_DICT.esm1b.pkl', 'rb') as f:
+with open(f'./utils/ESM_AA_EMBEDDING_DICT.esm1b.pkl', 'rb') as f:
     ESM1b_AA_EMBEDDING_DICT = pickle.load(f)
 # prepare 5dim embeddings
-with open(f'/share/vault/Users/gz2294/PreMode/utils/AA_5_DIM_EMBED.pkl', 'rb') as f:
+with open(f'./utils/AA_5_DIM_EMBED.pkl', 'rb') as f:
     AA_5DIM_EMBED = pickle.load(f)
 # ESM tokens
 ESM_TOKENS = ['<cls>', '<pad>', '<eos>', '<unk>',
@@ -78,7 +81,6 @@ class Mutation:
         self.seq_end_orig = None
         self.pos = None
         self.uniprot_id = None
-        self.af2_file_indic = None
         self.af2_file = None
         self.af2_rep_file_prefix = None
         self.af2_seq_index = None
@@ -152,8 +154,7 @@ class Mutation:
             self.seq_len = seq_len
             self.pos = pos
             self.uniprot_id = uniprot_id
-            self.af2_file = f'{AF2_DATA_PATH}/{uniprot_id[:3]}/AF-{uniprot_id}-F{idx}-model_v4.pdb.gz'
-            self.af2_file_indic = f'{AF2_DATA_PATH}/AF-{uniprot_id}-F{idx}-model_v4.pdb.gz'
+            self.af2_file = f'{AF2_DATA_PATH}/AF-{uniprot_id}-F{idx}-model_v4.pdb.gz'
         else:
             self.af2_file = af2_file
             self.ESM_prefix = uniprot_id
@@ -181,12 +182,12 @@ class Mutation:
         if not exists(self.af2_file):
             print(f'Warning: {self.uniprot_id} AF2 file not found: {self.af2_file}')
             self.af2_file = None
-        else:
-            af2_seq = AF2_SEQ_DICT[self.af2_file_indic]['seq']
-            if af2_seq != self.seq and not self.crop:
-                # if not match and not due to crop, then the seq is not in the AF2 file
-                print(f'Warning: {self.uniprot_id} seq not match AF2 seq: {self.seq} vs {af2_seq}')
-                self.af2_file = None
+        # else:
+        #     af2_seq = AF2_SEQ_DICT[self.af2_file]['seq']
+        #     if af2_seq != self.seq and not self.crop:
+        #         # if not match and not due to crop, then the seq is not in the AF2 file
+        #         print(f'Warning: {self.uniprot_id} seq not match AF2 seq: {self.seq} vs {af2_seq}')
+        #         self.af2_file = None
         self.af2_seq_index = None  # Use index to avoid loading the same seq multiple times
 
     def crop_fn(self):
@@ -264,6 +265,10 @@ class MaskPredictPointMutation(Mutation):
 
 def convert_to_onesite(dataset: pd.DataFrame):
     # first get unique uniprotID and pos.orig
+    if 'ref_aa' not in dataset.columns:
+        dataset['ref_aa'] = dataset['ref']
+    if 'alt_aa' not in dataset.columns:
+        dataset['alt_aa'] = dataset['alt']
     dataset_onesite = dataset.copy(deep=True)
     dataset_onesite = dataset_onesite.drop_duplicates(subset=['uniprotID', 'pos.orig'])
     # then for each unique uniprotID and pos.orig, get all ref and alt aa, as well as their scores
@@ -271,6 +276,12 @@ def convert_to_onesite(dataset: pd.DataFrame):
     # get score and confidence.score columns
     score_cols = [col for col in dataset.columns if col.startswith('score')]
     confidence_cols = [col for col in dataset.columns if col.startswith('confidence.score')]
+    # if confidence_cols is empty, then use 1
+    if len(confidence_cols) == 0:
+        confidence_cols = [f'confidence.score.{i}' for i in range(len(score_cols))]
+        for col in confidence_cols:
+            dataset[col] = 1
+            dataset_onesite[col] = 1
     for i in dataset_onesite.index:
         subdataset = dataset[(dataset['uniprotID'] == dataset_onesite.loc[i, 'uniprotID']) & (dataset['pos.orig'] == dataset_onesite.loc[i, 'pos.orig'])]
         dataset_onesite.loc[i, 'ref_aa'] = ';'.join(subdataset['ref_aa'].values)
@@ -278,11 +289,11 @@ def convert_to_onesite(dataset: pd.DataFrame):
         # if score_cols and confidence_cols are not empty, then concatenate them
         if len(score_cols) > 0:
             for col in score_cols:
-                dataset_onesite.loc[i, col] = ';'.join(subdataset[col].values)
+                dataset_onesite.loc[i, col] = ';'.join(subdataset[col].values.astype('str'))
         if len(confidence_cols) > 0:
             for col in confidence_cols:
-                dataset_onesite.loc[i, col] = ';'.join(subdataset[col].values)
-    return dataset
+                dataset_onesite.loc[i, col] = ';'.join(subdataset[col].values.astype('str'))
+    return dataset_onesite
 
 
 def load_structure(fpath, chain=None):
@@ -599,7 +610,7 @@ def get_esm_dict_from_uniprot(uniprotID):
     return wt_orig
 
 
-def get_af2_single_rep_dict_from_prefix(uniprotID_prefix):
+def get_af2_single_rep_dict_from_prefix(uniprotID_prefix, filter=False):
     # sometimes colabfold will padding the results, we need to remove the padding
     file_path = f"{uniprotID_prefix}_single_repr_rank_001_alphafold2_ptm_model_1_seed_000.npy"
     wt_orig = np.load(file_path)

@@ -16,7 +16,7 @@ from pyro.nn.module import to_pyro_module_
 from data.utils import AA_DICT_HUMAN, ESM_TOKENS
 from model.module.utils import act_class_mapping
 from .utils import CosineCutoff
-from .attention import PAEMultiHeadAttentionSoftMaxStarGraph
+from .attention import PAEMultiHeadAttentionSoftMaxStarGraph, MultiHeadAttentionSoftMaxStarGraph
 from esm.modules import RobertaLMHead
 
 
@@ -209,7 +209,7 @@ class EquivariantScalar(OutputModel):
         return self.output_network(x)
 
 
-class EquivariantAttnScalar(EquivariantScalar):
+class EquivariantPAEAttnScalar(EquivariantScalar):
     def __init__(
             self,
             args,
@@ -256,6 +256,53 @@ class EquivariantAttnScalar(EquivariantScalar):
         return x, attn
 
 
+class EquivariantAttnScalar(EquivariantScalar):
+    def __init__(
+            self,
+            args,
+            activation="sigmoid",
+            allow_prior_model=True,
+    ):
+        x_channels = args["x_channels"]
+        super(EquivariantAttnScalar, self).__init__(
+            args=args,
+            activation=activation,
+            allow_prior_model=allow_prior_model,
+        )
+        # apply two layers of StarPool
+        if args["loss_fn"] == "weighted_combined_loss" or args["loss_fn"] == "combined_loss":
+            use_lora = args["use_lora"]
+        else:
+            use_lora = None
+        input_dic = {
+            "x_channels": args["x_channels"],
+            "x_hidden_channels": args["x_hidden_channels"],
+            "vec_channels": args["vec_channels"],
+            "vec_hidden_channels": args["vec_hidden_channels"],
+            "share_kv": args["share_kv"],
+            "edge_attr_dist_channels": args["num_rbf"],
+            "edge_attr_channels": args["num_edge_attr"],
+            "distance_influence": args["distance_influence"],
+            "num_heads": args["num_heads"],
+            "activation": act_class_mapping[args["activation"]],
+            "cutoff_lower": args["cutoff_lower"],
+            "cutoff_upper": args["cutoff_upper"],
+            "use_lora": use_lora
+        }
+        self.AttnPoolLayers = nn.ModuleList([
+            MultiHeadAttentionSoftMaxStarGraph(**input_dic),
+        ])
+
+    def reduce(self, x, x_center_index, w_ij, f_dist_ij, f_ij, plddt, key_padding_mask):
+        # x don't have to reduce to x_center_index but w_ij and f_dist_ij have to
+        # w_ij = w_ij[x_center_index].unsqueeze(1)
+        # f_dist_ij = f_dist_ij[x_center_index].unsqueeze(1)
+        f_ij = f_ij[x_center_index].unsqueeze(1)
+        for layer in self.AttnPoolLayers:
+            x, attn = layer(x, x_center_index, None, None, f_ij, key_padding_mask, True)
+        return x, attn
+
+
 class EquivariantAttnOneSiteScalar(EquivariantAttnScalar):
     def __init__(
             self,
@@ -272,7 +319,8 @@ class EquivariantAttnOneSiteScalar(EquivariantAttnScalar):
         )
 
     def post_reduce(self, x):
-        return self.output_network(x).reshape(-1, len(AA_DICT_HUMAN), self.output_dim)
+        res = self.output_network(x).reshape(-1, len(AA_DICT_HUMAN), self.output_dim)
+        return res
 
 
 class EquivariantStarPoolScalar(EquivariantScalar):
@@ -326,7 +374,8 @@ class EquivariantStarPoolOneSiteScalar(EquivariantStarPoolScalar):
         )
 
     def post_reduce(self, x):
-        return self.output_network(x).reshape(-1, len(AA_DICT_HUMAN), self.output_dim)
+        res = self.output_network(x).reshape(-1, len(AA_DICT_HUMAN), self.output_dim)
+        return res
 
 
 class EquivariantStarPoolMeanVarScalar(EquivariantStarPoolScalar):
@@ -748,6 +797,8 @@ def build_output_model(output_model_name, args, **kwargs):
         return EquivariantStarPoolMeanVarScalar(args=args, activation="softplus")
     elif output_model_name == "EquivariantBinaryClassificationAttnScalar":
         return EquivariantAttnScalar(args=args, activation="sigmoid")
+    elif output_model_name == "EquivariantBinaryClassificationPAEAttnScalar":
+        return EquivariantPAEAttnScalar(args=args, activation="sigmoid")
     elif output_model_name == "EquivariantBinaryClassificationStarPoolOneSiteScalar":
         return EquivariantStarPoolOneSiteScalar(args=args, activation="sigmoid")
     elif output_model_name == "EquivariantBinaryClassificationAttnOneSiteScalar":
@@ -764,8 +815,14 @@ def build_output_model(output_model_name, args, **kwargs):
         return EquivariantStarPoolScalar(args=args, activation="pass")
     elif output_model_name == "EquivariantRegressionStarPoolMeanVarScalar":
         return EquivariantStarPoolMeanVarScalar(args=args, activation="pass")
+    elif output_model_name == "EquivariantRegressionAttnScalar":
+        return EquivariantAttnScalar(args=args, activation="pass")
+    elif output_model_name == "EquivariantRegressionPAEAttnScalar":
+        return EquivariantPAEAttnScalar(args=args, activation="pass")
     elif output_model_name == "EquivariantRegressionStarPoolOneSiteScalar":
         return EquivariantStarPoolOneSiteScalar(args=args, activation="pass")
+    elif output_model_name == "EquivariantRegressionAttnOneSiteScalar":
+        return EquivariantAttnOneSiteScalar(args=args, activation="pass")
     else:
         raise NotImplementedError
     return None

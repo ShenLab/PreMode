@@ -1,6 +1,6 @@
 args <- commandArgs(trailingOnly = T)
 out.dir.1 <- 'figs/02.02.ICC.tasks.compare.pdf'
-out.dir.2 <- 'figs/02.02.ICC.models.compare.pdf'
+# out.dir.2 <- 'figs/02.02.ICC.models.compare.pdf'
 
 result.plot <- readRDS('figs/02.02.ICC.folders.compare.RDS')
 result.plot <- result.plot[result.plot$task.type %in% c("Gene"),]
@@ -11,7 +11,7 @@ result.plot <- result.plot[result.plot$model %in% c("PreMode.inference/",
 model.dic <- c("PreMode.inference/"="1: PreMode",
                "PreMode.pass.inference/"="2: ESM + SLP",
                "PreMode.noPretrain/"="3: PreMode: no pretrain",
-               "BioChem (Random Forest)"="5: Random\nForest")
+               "BioChem (Random Forest)"="4: Random Forest")
 result.plot$model <- model.dic[result.plot$model]
 
 num.models <- length(unique(result.plot$model))
@@ -28,8 +28,11 @@ p <- ggplot(result.plot, aes(y=auc, x=task.name, col=model)) +
   labs(x = "task", y = "auc", fill = "model") +
   theme_bw() + 
   theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
+        text = element_text(size = 13),
         legend.position="bottom", 
         legend.direction="horizontal") +
+  ggtitle('PreMode compared to baseline methods') +
+  ggeasy::easy_center_title() +
   coord_flip() + guides(col=guide_legend(ncol=3)) +
   ylim(0.5, 1) + xlab('task: Genetics Level Mode of Action') 
 ggsave(paste0(out.dir.1), p, height = 6, width = 6)

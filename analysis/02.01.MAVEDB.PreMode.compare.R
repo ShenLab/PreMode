@@ -14,7 +14,7 @@ task.dic <- list("PTEN"=c("score.1"="stability", "score.2"="enzyme.activity"),
                  "ASPA"=c("score.1"="stability", "score.2"="enzyme.activity")
                  )
 alphabet_premode <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
-              'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
+                      'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
 # base.dirs <- strsplit(base.dirs, split = ',')[[1]]
 # results <- data.frame()
 # for (base.dir in base.dirs) {
@@ -33,7 +33,7 @@ for (i in 1:length(genes)) {
   assay <- read.csv(paste0('/share/vault/Users/gz2294/Data/DMS/MAVEDB/', genes[i], '/ALL.annotated.csv'))
   assay$unique.id <- paste0(assay$ref, assay$pos.orig, assay$alt)
   for (fold in 0:4) {
-    if (!file.exists(paste0('PreMode.inference/', genes[i], '/testing.fold.',
+    if (!file.exists(paste0('PreMode.inference/', genes[i], '/test.fold.',
                             fold, '.annotated.csv'))) {
       test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
                                      '/testing.fold.', fold, '.csv'))
@@ -113,8 +113,8 @@ for (i in 1:length(genes)) {
                                    '/test.fold.', fold, '.annotated.csv'), row.names = 1)
     # test.result.onehot <- read.csv(paste0('PreMode.onehot.inference/', genes[i], '/',
     #                                       '/testing.fold.', fold, '.csv'))
-    # test.result.big <- read.csv(paste0('PreMode.PRE.v4/', genes[i], '/',
-    #                                       '/testing.fold.', fold, '.csv'))
+    test.result.big <- read.csv(paste0('PreMode.PRE.v4/archive/', genes[i], '/',
+                                          '/testing.fold.', fold, '.csv'))
     test.result.big.2 <- read.csv(paste0('PreMode.PRE.v8/', genes[i], '/',
                                        '/testing.fold.', fold, '.csv'))
     test.result.3 <- read.csv(paste0('PRE.v10/', genes[i], '/',
@@ -124,19 +124,34 @@ for (i in 1:length(genes)) {
     test.result.pass <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
                                         '/testing.fold.', fold, '.csv'))
     task.length <- length(task.dic[[genes[i]]])
-    # for (a in 0:(task.length-1)) {
-    #   test.result.big[,paste0('logits.alt.', a)] <- NA
-    # }
-    # for (k in 1:dim(test.result.big)[1]) {
-    #   for (a in 0:(task.length-1)) {
-    #     test.result.big[k,paste0('logits.alt.', a)] <- test.result.big[k, paste0('logits.', a+2*(match(test.result.big$alt[k], alphabet_premode)-1))]
-    #   }
-    # }
+    # add hsu et al results
+    hsu.unirep_onehot.auc <- list(R2=c())
+    hsu.ev_onehot.auc <- list(R2=c())
+    hsu.gesm_onehot.auc <- list(R2=c())
+    hsu.eve_onehot.auc <- list(R2=c())
+    for (s in 1:task.length) {
+      test.result.hsu <- read.csv(paste0('/share/vault/Users/gz2294/combining-evolutionary-and-assay-labelled-data/results/', 
+                                         genes[i], '.fold.', fold, '.score.', s, '/results.csv'))
+      hsu.unirep_onehot.auc$R2 <- c(hsu.unirep_onehot.auc$R2, test.result.hsu$spearman[match('eunirep_ll+onehot', test.result.hsu$predictor)])
+      hsu.ev_onehot.auc$R2 <- c(hsu.ev_onehot.auc$R2, test.result.hsu$spearman[match('ev+onehot', test.result.hsu$predictor)])
+      hsu.gesm_onehot.auc$R2 <- c(hsu.gesm_onehot.auc$R2, test.result.hsu$spearman[match('gesm+onehot', test.result.hsu$predictor)])
+      hsu.eve_onehot.auc$R2 <- c(hsu.eve_onehot.auc$R2, test.result.hsu$spearman[match('vae+onehot', test.result.hsu$predictor)])
+    }
+    for (a in 0:(task.length-1)) {
+      test.result.big[,paste0('logits.alt.', a)] <- NA
+    }
+    for (k in 1:dim(test.result.big)[1]) {
+      for (a in 0:(task.length-1)) {
+        test.result.big[k,paste0('logits.alt.', a)] <- test.result.big[k, paste0('logits.', a+2*(match(test.result.big$alt[k], alphabet_premode)-1))]
+      }
+    }
+    PreMode.big.auc <- plot.R2(test.result.big[,names(task.dic[[genes[i]]])], test.result.big[,paste0("logits.alt.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
     PreMode.auc <- plot.R2(test.result[,names(task.dic[[genes[i]]])], test.result[,paste0("logits.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
+    # print(PreMode.big.auc$R2)
+    # print(PreMode.auc$R2)
     PreMode.pretrain.auc <- plot.R2(test.result[,names(task.dic[[genes[i]]])], -test.result[,rep("pretrain.logits", task.length)], bin = grepl('bin', genes[i]))
     # PreMode.onehot.auc <- plot.R2(test.result.onehot[,names(task.dic[[genes[i]]])], test.result.onehot[,paste0("logits.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
     PreMode.pass.auc <- plot.R2(test.result.pass[,names(task.dic[[genes[i]]])], test.result.pass[,paste0("logits.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
-    # PreMode.big.auc <- plot.R2(test.result.big[,names(task.dic[[genes[i]]])], test.result.big[,paste0("logits.alt.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
     PreMode.big.auc.2 <- plot.R2(test.result.big.2[,names(task.dic[[genes[i]]])], test.result.big.2[,paste0("logits.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
     PreMode.auc.3 <- plot.R2(test.result.3[,names(task.dic[[genes[i]]])], test.result.3[,paste0("logits.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
     PreMode.auc.4 <- plot.R2(test.result.4[,names(task.dic[[genes[i]]])], test.result.4[,paste0("logits.", 0:(task.length-1))], bin = grepl('bin', genes[i]))
@@ -154,14 +169,22 @@ for (i in 1:length(genes)) {
                                           PreMode.big.auc.2$R2,
                                           PreMode.auc.3$R2,
                                           PreMode.auc.4$R2,
+                                          hsu.unirep_onehot.auc$R2,
+                                          hsu.ev_onehot.auc$R2,
+                                          hsu.gesm_onehot.auc$R2,
+                                          hsu.eve_onehot.auc$R2,
                                           REVEL.auc$R2, PrimateAI.auc$R2, ESM.auc$R2, EVE.auc$R2, gMVP.auc$R2),
-                            task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 11)),
+                            task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 15)),
                             HGNC=genes[i],
                             fold=fold,
                             npoints=dim(test.result)[1])
     to.append$model <- rep(c("PreMode.zero.shot", "PreMode (148k)", 
-                             "ESM emb + SLP", "PreMode (4.7M)", 
+                             "ESM2 emb + SLP", "PreMode (4.7M)", 
                              "PreMode (v10)", "PreMode (v11)", 
+                             "Augmented Unirep",
+                             "Augmented EVmutation",
+                             "Augmented ESM1b",
+                             "Augmented EVE",
                              "REVEL", "PrimateAI", "ESM", 'EVE', 'gMVP'), each = task.length)
     result <- rbind(result, to.append)
   }
@@ -169,7 +192,12 @@ for (i in 1:length(genes)) {
 write.csv(result, 'figs/02.01.MAVE.PreMode.compare.csv')
 
 result <- read.csv('figs/02.01.MAVE.PreMode.compare.csv', row.names = 1)
-result <- result[result$model %in% c("PreMode (148k)", "ESM emb + SLP", "PreMode (4.7M)", "PreMode (v10)", "PreMode (v11)"),]
+result <- result[result$model %in% c("PreMode (148k)", "ESM2 emb + SLP", 
+                                     # "PreMode (4.7M)", 
+                                     "Augmented Unirep",
+                                     "Augmented EVmutation",
+                                     "Augmented ESM1b",
+                                     "Augmented EVE"),]
 # result$min.val.R[result$task.name == "ASPA:enzyme.activity"] <- -result$min.val.R[result$task.name == "ASPA:enzyme.activity"]
 num.models <- length(unique(result$model))
 p <- ggplot(result, aes(y=min.val.R, x=task.name, col=model)) +
@@ -196,7 +224,7 @@ ggsave(paste0('figs/02.01.MAVE.PreMode.compare.pdf'), p, height = 8, width = 4)
 
 # plot the task weighted averages as well as task size weighted error bars
 uniq.result.plot <- result[result$fold==0,]
-for (i in 1:dim(uniq.result.plot)) {
+for (i in 1:dim(uniq.result.plot)[1]) {
   uniq.result.plot$rho[i] = mean(result$min.val.R[result$model==uniq.result.plot$model[i] & 
                                               result$task.name==uniq.result.plot$task.name[i]], na.rm=T)
   uniq.result.plot$rho.sd[i] = sd(result$min.val.R[result$model==uniq.result.plot$model[i] & 

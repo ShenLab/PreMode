@@ -21,6 +21,7 @@ from ..module.attention import (
     EquivariantWeightedPAEMultiHeadAttention,
     EquivariantWeightedPAEMultiHeadAttentionSoftMax,
     EquivariantPAEMultiHeadAttentionSoftMaxFullGraph,
+    MultiHeadAttentionSoftMaxFullGraph,
     MSAEncoderFullGraph,
     EquivariantTriAngularMultiHeadAttention,
     EquivariantTriAngularStarMultiHeadAttention,
@@ -1490,6 +1491,112 @@ class eqStar2FullGraphPAETransformerSoftMax(nn.Module):
                 attn_weight_layers.append(attn_weight)
         x = self.out_norm(x)
         return x, vec, pos, [edge_confidence, edge_attr_distance, edge_attr, plddt], batch, attn_weight_layers
+
+
+class FullGraphPAETransformerSoftMax(eqStar2FullGraphPAETransformerSoftMax):
+    """The equivariant Transformer architecture.
+    First Layer is Star Graph, next layer is full graph
+
+    Args:
+        x_channels (int, optional): Hidden embedding size.
+            (default: :obj:`128`)
+        num_layers (int, optional): The number of attention layers.
+            (default: :obj:`6`)
+        num_rbf (int, optional): The number of radial basis functions :math:`\mu`.
+            (default: :obj:`50`)
+        rbf_type (string, optional): The type of radial basis function to use.
+            (default: :obj:`"expnorm"`)
+        trainable_rbf (bool, optional): Whether to train RBF parameters with
+            backpropagation. (default: :obj:`True`)
+        activation (string, optional): The type of activation function to use.
+            (default: :obj:`"silu"`)
+        attn_activation (string, optional): The type of activation function to use
+            inside the attention mechanism. (default: :obj:`"silu"`)
+        neighbor_embedding (bool, optional): Whether to perform an initial neighbor
+            embedding step. (default: :obj:`True`)
+        num_heads (int, optional): Number of attention heads.
+            (default: :obj:`8`)
+        distance_influence (string, optional): Where distance information is used inside
+            the attention mechanism. (default: :obj:`"both"`)
+        cutoff_lower (float, optional): Lower cutoff distance for interatomic interactions.
+            (default: :obj:`0.0`)
+        cutoff_upper (float, optional): Upper cutoff distance for interatomic interactions.
+            (default: :obj:`5.0`)
+    """
+
+    def __init__(
+            self,
+            x_in_channels=None,
+            x_channels=5120,
+            x_hidden_channels=1280,
+            vec_in_channels=4,
+            vec_channels=128,
+            vec_hidden_channels=5120,
+            share_kv=False,
+            num_layers=6,
+            num_edge_attr=145,
+            num_rbf=50,
+            rbf_type="expnorm",
+            trainable_rbf=True,
+            activation="silu",
+            attn_activation="silu",
+            neighbor_embedding=True,
+            num_heads=8,
+            distance_influence="both",
+            cutoff_lower=0.0,
+            cutoff_upper=5.0,
+            x_in_embedding_type="Linear",
+            x_use_msa=False,
+            drop_out_rate=0,  # new feature
+            use_lora=None,
+    ):
+        super(FullGraphPAETransformerSoftMax, self).__init__(x_in_channels=x_in_channels,
+                                                            x_channels=x_channels,
+                                                            x_hidden_channels=x_hidden_channels,
+                                                            vec_in_channels=vec_in_channels,
+                                                            vec_channels=vec_channels,
+                                                            vec_hidden_channels=vec_hidden_channels,
+                                                            share_kv=share_kv,
+                                                            num_layers=num_layers,
+                                                            num_edge_attr=num_edge_attr,
+                                                            num_rbf=num_rbf,
+                                                            rbf_type=rbf_type,
+                                                            trainable_rbf=trainable_rbf,
+                                                            activation=activation,
+                                                            attn_activation=attn_activation,
+                                                            neighbor_embedding=neighbor_embedding,
+                                                            num_heads=num_heads,
+                                                            distance_influence=distance_influence,
+                                                            cutoff_lower=cutoff_lower,
+                                                            cutoff_upper=cutoff_upper,
+                                                            x_in_embedding_type=x_in_embedding_type,
+                                                            x_use_msa=x_use_msa,
+                                                            drop_out_rate=drop_out_rate,
+                                                            use_lora=use_lora)
+
+    def _set_attn_layers(self):
+        assert self.num_layers > 0, "num_layers must be greater than 0"
+        # first star graph layer does not have softmax, can have msa
+        # following layers are full graph layers, have softmax, no msa
+        input_dic = {
+            "x_channels": self.x_channels,
+            "x_hidden_channels": self.x_hidden_channels,
+            "vec_channels": self.vec_channels,
+            "vec_hidden_channels": self.vec_hidden_channels,
+            "share_kv": self.share_kv,
+            "edge_attr_dist_channels": self.num_rbf,
+            "edge_attr_channels": self.num_edge_attr,
+            "distance_influence": self.distance_influence,
+            "num_heads": self.num_heads,
+            "activation": act_class_mapping[self.activation],
+            "attn_activation": self.attn_activation,
+            "cutoff_lower": self.cutoff_lower,
+            "cutoff_upper": self.cutoff_upper,
+            "use_lora": self.use_lora
+        }
+        for _ in range(self.num_layers):
+            layer = MultiHeadAttentionSoftMaxFullGraph(**input_dic)
+            self.attention_layers.append(layer)
 
 
 class eqStar2WeightedPAETransformerSoftMax(eqStar2PAETransformerSoftMax):

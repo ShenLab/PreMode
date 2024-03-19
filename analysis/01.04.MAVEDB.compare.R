@@ -9,7 +9,7 @@ source('~/Pipeline/AUROC.R')
 #             'CHPs.v4.noMSA', 'CHPs.v4.noStructure', 'CHPs.v4.onehot.dssp.small.StarAttn.MSA.StarPool.1dim',
 #             'CHPs.v4.pass', 'CHPs.v4.ptm', 'PreMode', 'PreMode.PRE.v4', 'PreMode.PRE.v4.fullgraph', 
 #             'PreMode.v5', 'PRE.v5.fullGraph.89600')
-models <- c('PreMode', 'PreMode.PRE.v4', 'PreMode.PRE.v8', 'CHPs.v4.esm_mask'
+models <- c('PreMode', 'PreMode.PRE.v4', 'PreMode.PRE.v8', 'CHPs.v4.esm_mask', 'PRE.v12', 'PRE.v13', 'PRE.v15'
             # 'PRE.v9', 'PRE.v10'
             )
 scores <- c(scores, models)

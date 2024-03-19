@@ -14,6 +14,11 @@ from multiprocessing import Pool
 from multiprocessing import get_context
 from typing import Any, List
 import data.utils as utils
+import h5py
+import lmdb
+import pickle
+from datetime import datetime
+import os
 NUM_THREADS = 42
 
 # Main Abstract Class, define a Mutation Dataset, compatible with PyTorch Geometric
@@ -57,6 +62,7 @@ class GraphMutationDataset(Dataset):
                  add_af2_pairwise: bool = False,
                  loaded_af2_single: bool = False,
                  loaded_af2_pairwise: bool = False,
+                 use_lmdb: bool = False,
                  ):
         super(GraphMutationDataset, self).__init__()
         if isinstance(data_file, pd.DataFrame):
@@ -145,7 +151,9 @@ class GraphMutationDataset(Dataset):
             self.data = self.data.iloc[shuffle_index].reset_index(drop=True)
             self.mutations = list(map(self.mutations.__getitem__, shuffle_index))
         if self.add_ptm:
-            self.ptm_ref = pd.read_csv('/share/vault/Users/gz2294/Data/Protein/PSP/ptm.small.csv', index_col=0)
+            self.ptm_ref = pd.read_csv('./data.files/ptm.small.csv', index_col=0)
+        self.get_method = 'default'
+        # self.load_all_to_memory()
 
     def _check_embedding_files(self):
         print(f"read in {len(self.data)} mutations from {self.data_file}")
@@ -233,9 +241,10 @@ class GraphMutationDataset(Dataset):
         with get_context("spawn").Pool(NUM_THREADS) as p:
             if self.add_af2_single and self.loaded_af2_single:
                 self.af2_single_dict = p.starmap(utils.get_af2_single_rep_dict_from_prefix, zip(self.af2_rep_file_prefix_dict))
-            if self.add_af2_pairwise and self.loaded_af2_pairwise:
-                self.af2_pair_dict = p.starmap(utils.get_af2_pairwise_rep_dict_from_prefix, zip(self.af2_rep_file_prefix_dict))
-            print(f'Finished loading {len(self.af2_rep_file_prefix_dict)} alphafold2 representations')
+            print(f'Finished loading {len(self.af2_rep_file_prefix_dict)} alphafold2 single representations')
+            # because the pairwise representation is too large to fit in RAM, we have to select a subset of them
+        if self.add_af2_pairwise and self.loaded_af2_pairwise:
+            raise ValueError("Not implemented in this version")
             
     def _load_msa_features(self):
         self.msa_file_dict, mutation_idx = np.unique([mutation.uniprot_id for mutation in self.mutations],
@@ -315,7 +324,24 @@ class GraphMutationDataset(Dataset):
         start = time.time()
         if self.add_af2_pairwise:
             if self.loaded_af2_pairwise:
-                pairwise_rep = self.af2_pair_dict[mutation.af2_rep_index]
+                # we don't use the self.af2_pair_dict anymore because it won't fit in RAM
+                # pairwise_rep = self.af2_pair_dict[mutation.af2_rep_index]
+                # we load from lmdb
+                byteflow = self.af2_pairwise_txn.get(u'{}'.format(mutation.af2_rep_file_prefix.split('/')[-1]).encode('ascii'))
+                pairwise_rep = pickle.loads(byteflow)
+                if pairwise_rep is None:
+                    pairwise_rep = utils.get_af2_pairwise_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
+                # instead we load from lmdb
+                # if not hasattr(self, 'af2_pairwise_txn'):
+                #     # open all lmdb in self.af2_pair_dict_lmdb_path
+                #     self.af2_pairwise_env = []
+                #     self.af2_pairwise_txn = []
+                #     for lmdb_path in self.af2_pair_dict_lmdb_path:
+                #         af2_pairwise_env = lmdb.open(lmdb_path, subdir=False, readonly=True, lock=False, readahead=False, meminit=False)
+                #         self.af2_pairwise_txn.append(af2_pairwise_env.begin(write=False, buffers=True))
+                #         self.af2_pairwise_env.append(af2_pairwise_env)
+                # byteflow = self.af2_pairwise_txn[mutation.af2_rep_index // 20].get(u'{}'.format(mutation.af2_rep_index).encode('ascii'))
+                # pairwise_rep = pickle.loads(byteflow)
             else:
                 pairwise_rep = utils.get_af2_pairwise_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
             # crop the pairwise_rep, if necessary
@@ -622,8 +648,45 @@ class GraphMutationDataset(Dataset):
             features['score_mask'] = torch.tensor([self.data[self._y_mask_columns].iloc[int(idx)]]).to(torch.float)
         return Data(**features)
 
+    def get_from_hdf5(self, idx):
+        if not hasattr(self, 'hdf5_keys') or self.hdf5_file is None:
+            raise ValueError('hdf5 file is not set')
+        else:
+            features = {}
+            with h5py.File(self.hdf5_file, 'r') as f:
+                for key in self.hdf5_keys:
+                    features[key] = torch.tensor(f[f'{self.hdf5_idx_map[idx]}/{key}'])
+            return Data(**features)
+    
+    def open_lmdb(self):
+         self.env = lmdb.open(self.lmdb_path, subdir=False,
+                              readonly=True, lock=False,
+                              readahead=False, meminit=False)
+         self.txn = self.env.begin(write=False, buffers=True)
+    
+    def get_from_lmdb(self, idx):
+        if not hasattr(self, 'txn'):
+            self.open_lmdb()
+        byteflow = self.txn.get(u'{}'.format(self.lmdb_idx_map[idx]).encode('ascii'))
+        unpacked = pickle.loads(byteflow)
+        return unpacked
+    
     def __getitem__(self, idx):
-        return self.get(idx)
+        # record time
+        start = time.time()
+        if self.get_method == 'default':
+            data = self.get(idx)
+            print(f'default Finished loading {idx} in {time.time() - start:.2f} seconds')
+        elif self.get_method == 'hdf5':
+            data = self.get_from_hdf5(idx)
+            print(f'hdf5 Finished loading {idx} in {time.time() - start:.2f} seconds')
+        elif self.get_method == 'lmdb':
+            data = self.get_from_lmdb(idx)
+            print(f'lmdb Finished loading {idx} in {time.time() - start:.2f} seconds')
+        elif self.get_method == 'memory':
+            data = self.parsed_data[idx]
+            print(f'memory Finished loading {idx} in {time.time() - start:.2f} seconds')
+        return data
 
     def __len__(self):
         return len(self.mutations)
@@ -671,12 +734,26 @@ class GraphMutationDataset(Dataset):
             self.msa_dict = list(map(self.msa_dict.__getitem__, msa_file_idx)) if self.msa_dict is not None else None
             # reset the msa_seq_index
             _ = list(map(lambda x, y: x.set_msa_seq_index(y), self.mutations, mutation_idx))
+        # subset hdf5 idx map, if exists
+        if hasattr(self, 'hdf5_idx_map') and self.hdf5_idx_map is not None:
+            self.hdf5_idx_map = self.hdf5_idx_map[idxs]
+        # subset lmdb idx map, if exists
+        if hasattr(self, 'lmdb_idx_map') and self.lmdb_idx_map is not None:
+            self.lmdb_idx_map = self.lmdb_idx_map[idxs]
+        if hasattr(self, 'parsed_data') and self.parsed_data is not None:
+            self.parsed_data = list(map(self.parsed_data.__getitem__, idxs))
         return self
 
     def shuffle(self, idxs):
         # for shuffle, we only need to shuffle self.mutations and self.data
         self.data = self.data.iloc[idxs].reset_index(drop=True)
         self.mutations = list(map(self.mutations.__getitem__, idxs))
+        # shuffle hdf5 idx map, if exists
+        if self.hdf5_idx_map is not None:
+            self.hdf5_idx_map = self.hdf5_idx_map[idxs]
+        # shuffle lmdb idx map, if exists
+        if self.lmdb_idx_map is not None:
+            self.lmdb_idx_map = self.lmdb_idx_map[idxs]
 
     def get_label_counts(self) -> np.ndarray:
         if self.data.columns.isin(['score']).any():
@@ -695,6 +772,96 @@ class GraphMutationDataset(Dataset):
                 return np.array([benign, patho])
         else:
             return np.array([0, 0])
+    
+    # create a hdf5 file for the dataset, for faster loading        
+    def create_hdf5(self):
+        hdf5_file = self.data_file.replace('.csv', f'.{datetime.now()}.hdf5')
+        self.hdf5_file = hdf5_file
+        self.get_method = 'hdf5'
+        self.hdf5_keys = None
+        # create a mapping from mutation index to hdf5 index, in case of subset or shuffle
+        self.hdf5_idx_map = np.arange(len(self))
+        with h5py.File(hdf5_file, 'w') as f:
+            for i in range(len(self)):
+                features = self.get(i)
+                # store feature keys into self
+                if self.hdf5_keys is None:
+                    self.hdf5_keys = list(features.keys())
+                for key in features.keys():
+                    f.create_dataset(f'{i}/{key}', data=features[key])
+        return
+    
+    # create a lmdb file for the dataset, for faster loading
+    def create_lmdb(self, write_frequency=1000):
+        lmdb_path = self.data_file.replace('.csv', f'.{datetime.now()}.lmdb')
+        map_size = 5e12 # 5TB
+        db = lmdb.open(lmdb_path, subdir=False, map_size=map_size, readonly=False, meminit=False, map_async=True)
+        print(f"Begin loading {len(self)} points into lmdb")
+        txn = db.begin(write=True)
+        for idx in range(len(self)):
+            d = self.get(idx)
+            txn.put(u'{}'.format(idx).encode('ascii'), pickle.dumps(d))
+            print(f'Finished loading {idx}')
+            if (idx + 1) % write_frequency == 0:
+                txn.commit()
+                txn = db.begin(write=True)
+        txn.commit()
+        print(f"Finished loading {len(self)} points into lmdb")
+        self.lmdb_path = lmdb_path
+        self.lmdb_idx_map = np.arange(len(self))
+        self.get_method = 'lmdb'
+        print("Flushing database ...")
+        db.sync()
+        db.close()
+        return
+
+    def load_all_to_memory(self):
+        # load all data into memory
+        self.parsed_data = [self.get(i) for i in range(len(self))]
+        self.get_method = 'memory'
+        # safe to delete all 'dict' data
+        if hasattr(self, 'af2_file_dict'):
+            del self.af2_file_dict
+        if hasattr(self, 'af2_coord_dict'):
+            del self.af2_coord_dict
+        if hasattr(self, 'af2_plddt_dict'):
+            del self.af2_plddt_dict
+        if hasattr(self, 'af2_confidence_dict'):
+            del self.af2_confidence_dict
+        if hasattr(self, 'af2_dssp_dict'):
+            del self.af2_dssp_dict
+        if hasattr(self, 'af2_graph_dict'):
+            del self.af2_graph_dict
+        if hasattr(self, 'esm_file_dict'):
+            del self.esm_file_dict
+        if hasattr(self, 'esm_dict'):
+            del self.esm_dict
+        if hasattr(self, 'msa_file_dict'):
+            del self.msa_file_dict
+        if hasattr(self, 'msa_dict'):
+            del self.msa_dict
+        if hasattr(self, 'af2_single_dict'):
+            del self.af2_single_dict
+        if hasattr(self, 'af2_pairwise_dict'):
+            del self.af2_pairwise_dict
+        return
+
+    # clean up hdf5 and lmdb files
+    def clean_up(self):
+        if hasattr(self, 'hdf5_file') and self.hdf5_file is not None and os.path.exists(self.hdf5_file):
+            os.remove(self.hdf5_file)
+        if hasattr(self, 'lmdb_path') and self.lmdb_path is not None and os.path.exists(self.lmdb_path):
+            os.remove(self.lmdb_path)
+        if hasattr(self, 'af2_pair_dict_lmdb_path') and self.af2_pair_dict_lmdb_path is not None:
+            for lmdb_path in self.af2_pair_dict_lmdb_path:
+                if os.path.exists(lmdb_path):
+                    os.remove(lmdb_path)
+        # close lmdb env, if exists
+        if hasattr(self, 'env') and self.env is not None:
+            self.env.close()
+        if hasattr(self, 'af2_pairwise_env') and self.af2_pairwise_env is not None:
+            self.af2_pairwise_env.close()
+        return
 
 
 class FullGraphMutationDataset(TorchDataset):
@@ -738,6 +905,7 @@ class FullGraphMutationDataset(TorchDataset):
                  add_af2_pairwise: bool = False,
                  loaded_af2_single: bool = False,
                  loaded_af2_pairwise: bool = False,
+                 use_lmdb: bool = False
                  ):
         super(FullGraphMutationDataset, self).__init__()
         if isinstance(data_file, pd.DataFrame):
@@ -768,6 +936,10 @@ class FullGraphMutationDataset(TorchDataset):
         self.add_dssp = add_dssp
         self.add_msa = add_msa
         self.add_confidence = add_confidence
+        self.add_af2_single = add_af2_single
+        self.add_af2_pairwise = add_af2_pairwise
+        self.loaded_af2_single = loaded_af2_single
+        self.loaded_af2_pairwise = loaded_af2_pairwise
         self.loaded_confidence = loaded_confidence
         self.add_ptm = add_ptm
         self.loaded_msa = loaded_msa
@@ -810,6 +982,8 @@ class FullGraphMutationDataset(TorchDataset):
             self._load_msa_features()
         if self.loaded_esm:
             self._load_esm_features()
+        if self.loaded_af2_pairwise or self.loaded_af2_single:
+            self._load_af2_reps()
         self._set_node_embeddings()
         self._set_edge_embeddings()
         self.unmatched_msa = 0
@@ -821,7 +995,12 @@ class FullGraphMutationDataset(TorchDataset):
             self.data = self.data.iloc[shuffle_index].reset_index(drop=True)
             self.mutations = list(map(self.mutations.__getitem__, shuffle_index))
         if self.add_ptm:
-            self.ptm_ref = pd.read_csv('/share/vault/Users/gz2294/Data/Protein/PSP/ptm.small.csv', index_col=0)
+            self.ptm_ref = pd.read_csv('./data.files/ptm.small.csv', index_col=0)
+        self.get_method = 'default'
+        if use_lmdb:
+            self.get_method = 'lmdb'
+            self.lmdb_path = data_file.replace('.csv', '.lmdb')
+            self.lmdb_idx_map = np.arange(len(self))
 
     def _check_embedding_files(self):
         print(f"read in {len(self.data)} mutations from {self.data_file}")
@@ -885,7 +1064,19 @@ class FullGraphMutationDataset(TorchDataset):
         with get_context("spawn").Pool(NUM_THREADS) as p:
             self.esm_dict = p.starmap(utils.get_esm_dict_from_uniprot, zip(self.esm_file_dict))
             print(f'Finished loading {len(self.esm_file_dict)} esm embeddings')
-            
+
+    def _load_af2_reps(self):
+        self.af2_rep_file_prefix_dict, mutation_idx = np.unique([mutation.af2_rep_file_prefix for mutation in self.mutations],
+                                                                return_inverse=True)
+        _ = list(map(lambda x, y: x.set_af2_rep_index(y), self.mutations, mutation_idx))
+        with get_context("spawn").Pool(NUM_THREADS) as p:
+            if self.add_af2_single and self.loaded_af2_single:
+                self.af2_single_dict = p.starmap(utils.get_af2_single_rep_dict_from_prefix, zip(self.af2_rep_file_prefix_dict))
+            print(f'Finished loading {len(self.af2_rep_file_prefix_dict)} alphafold2 single representations')
+            # because the pairwise representation is too large to fit in RAM, we have to select a subset of them
+        if self.add_af2_pairwise and self.loaded_af2_pairwise:
+            raise ValueError("Not implemented in this version")
+        
     def _load_msa_features(self):
         self.msa_file_dict, mutation_idx = np.unique([mutation.uniprot_id for mutation in self.mutations],
                                                      return_inverse=True)
@@ -921,6 +1112,39 @@ class FullGraphMutationDataset(TorchDataset):
         else:
             coevo_strength = np.zeros([mutation.seq_end - mutation.seq_start + 1,
                                         mutation.seq_end - mutation.seq_start + 1, 0])
+        start = time.time()
+        if self.add_af2_pairwise:
+            if self.loaded_af2_pairwise:
+                # we don't use the self.af2_pair_dict anymore because it won't fit in RAM
+                # pairwise_rep = self.af2_pair_dict[mutation.af2_rep_index]
+                # we load from lmdb
+                byteflow = self.af2_pairwise_txn.get(u'{}'.format(mutation.af2_rep_file_prefix.split('/')[-1]).encode('ascii'))
+                pairwise_rep = pickle.loads(byteflow)
+                if pairwise_rep is None:
+                    pairwise_rep = utils.get_af2_pairwise_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
+                # instead we load from lmdb
+                # if not hasattr(self, 'af2_pairwise_txn'):
+                #     # open all lmdb in self.af2_pair_dict_lmdb_path
+                #     self.af2_pairwise_env = []
+                #     self.af2_pairwise_txn = []
+                #     for lmdb_path in self.af2_pair_dict_lmdb_path:
+                #         af2_pairwise_env = lmdb.open(lmdb_path, subdir=False, readonly=True, lock=False, readahead=False, meminit=False)
+                #         self.af2_pairwise_txn.append(af2_pairwise_env.begin(write=False, buffers=True))
+                #         self.af2_pairwise_env.append(af2_pairwise_env)
+                # byteflow = self.af2_pairwise_txn[mutation.af2_rep_index // 20].get(u'{}'.format(mutation.af2_rep_index).encode('ascii'))
+                # pairwise_rep = pickle.loads(byteflow)
+            else:
+                pairwise_rep = utils.get_af2_pairwise_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
+            # crop the pairwise_rep, if necessary
+            if mutation.af2_rep_file_prefix.find('-F') == -1:
+                pairwise_rep = pairwise_rep[mutation.seq_start_orig - 1: mutation.seq_end_orig,
+                                            mutation.seq_start_orig - 1: mutation.seq_end_orig]
+            if mutation.crop:
+                pairwise_rep = pairwise_rep[mutation.seq_start - 1: mutation.seq_end,
+                                            mutation.seq_start - 1: mutation.seq_end]
+            coevo_strength = np.concatenate([coevo_strength, pairwise_rep], axis=2)
+        end = time.time()
+        print(f'Finished loading pairwise in {end - start:.2f} seconds')
         edge_attr = coevo_strength # N, N, 1
         # if add positional embedding, add it here
         if self.add_position:
@@ -1029,6 +1253,27 @@ class FullGraphMutationDataset(TorchDataset):
             to_alt = np.concatenate([to_alt, dssp_data[mask_idx]], axis=1)
             if self.alt_type == 'diff':
                 to_ref = np.concatenate([to_ref, dssp_data[mask_idx]], axis=1)
+        if self.add_ptm:
+            # ptm used to behind msa, moved it here
+            ptm_data = utils.get_ptm_from_mutation(mutation, self.ptm_ref)
+            embed_data = np.concatenate([embed_data, ptm_data], axis=1)
+            to_alt = np.concatenate([to_alt, ptm_data[mask_idx]], axis=1)
+            if self.alt_type == 'diff':
+                to_ref = np.concatenate([to_ref, ptm_data[mask_idx]], axis=1)
+        if self.add_af2_single:
+            if self.loaded_af2_single:
+                single_rep = self.af2_single_dict[mutation.af2_rep_index]
+            else:
+                single_rep = utils.get_af2_single_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
+            # crop the pairwise_rep, if necessary
+            if mutation.af2_rep_file_prefix.find('-F') == -1:
+                single_rep = single_rep[mutation.seq_start_orig - 1: mutation.seq_end_orig]
+            if mutation.crop:
+                single_rep = single_rep[mutation.seq_start - 1: mutation.seq_end]
+            embed_data = np.concatenate([embed_data, single_rep], axis=1)
+            to_alt = np.concatenate([to_alt, single_rep[mask_idx]], axis=1)
+            if self.alt_type == 'diff':
+                to_ref = np.concatenate([to_ref, single_rep[mask_idx]], axis=1)
         if self.add_msa:
             if msa_data.shape[0] == 0:
                 msa_data = np.zeros((embed_data.shape[0], 199))
@@ -1046,12 +1291,6 @@ class FullGraphMutationDataset(TorchDataset):
                 to_alt = np.concatenate([to_alt, msa_data[mask_idx]], axis=1)
             if self.alt_type == 'diff':
                 to_ref = np.concatenate([to_ref, msa_data[mask_idx]], axis=1)
-        if self.add_ptm:
-            ptm_data = utils.get_ptm_from_mutation(mutation, self.ptm_ref)
-            embed_data = np.concatenate([embed_data, ptm_data], axis=1)
-            to_alt = np.concatenate([to_alt, ptm_data[mask_idx]], axis=1)
-            if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, ptm_data[mask_idx]], axis=1)
         # replace the embedding with the mutation, note pos is 1-based
         # but we don't modify the embedding matrix, instead we return a mask matrix
         embed_data_mask = np.ones_like(embed_data)
@@ -1180,8 +1419,45 @@ class FullGraphMutationDataset(TorchDataset):
         print(f'Finished loading {idx}th mutation in {time.time() - start_time} seconds')
         return features
 
+    def get_from_hdf5(self, idx):
+        if not hasattr(self, 'hdf5_keys') or self.hdf5_file is None:
+            raise ValueError('hdf5 file is not set')
+        else:
+            features = {}
+            with h5py.File(self.hdf5_file, 'r') as f:
+                for key in self.hdf5_keys:
+                    features[key] = torch.tensor(f[f'{self.hdf5_idx_map[idx]}/{key}'])
+            return Data(**features)
+    
+    def open_lmdb(self):
+         self.env = lmdb.open(self.lmdb_path, subdir=False,
+                              readonly=True, lock=False,
+                              readahead=False, meminit=False)
+         self.txn = self.env.begin(write=False, buffers=True)
+    
+    def get_from_lmdb(self, idx):
+        if not hasattr(self, 'txn'):
+            self.open_lmdb()
+        byteflow = self.txn.get(u'{}'.format(self.lmdb_idx_map[idx]).encode('ascii'))
+        if byteflow is None:
+            return self.get(idx)
+        else:
+            unpacked = pickle.loads(byteflow)
+            return unpacked
+    
     def __getitem__(self, idx):
-        return self.get(idx)
+        # record time
+        start = time.time()
+        if self.get_method == 'default':
+            data = self.get(idx)
+            print(f'default Finished loading {idx} in {time.time() - start:.2f} seconds')
+        elif self.get_method == 'hdf5':
+            data = self.get_from_hdf5(idx)
+            print(f'hdf5 Finished loading {idx} in {time.time() - start:.2f} seconds')
+        elif self.get_method == 'lmdb':
+            data = self.get_from_lmdb(idx)
+            print(f'lmdb Finished loading {idx} in {time.time() - start:.2f} seconds')
+        return data
 
     def __len__(self):
         return len(self.mutations)
@@ -1253,6 +1529,56 @@ class FullGraphMutationDataset(TorchDataset):
                 return np.array([benign, patho])
         else:
             return np.array([0, 0])
+
+    # create a hdf5 file for the dataset, for faster loading        
+    def create_hdf5(self):
+        hdf5_file = self.data_file.replace('.csv', '.hdf5')
+        self.hdf5_file = hdf5_file
+        self.get_method = 'hdf5'
+        self.hdf5_keys = None
+        # create a mapping from mutation index to hdf5 index, in case of subset or shuffle
+        self.hdf5_idx_map = np.arange(len(self))
+        with h5py.File(hdf5_file, 'w') as f:
+            for i in range(len(self)):
+                features = self.get(i)
+                # store feature keys into self
+                if self.hdf5_keys is None:
+                    self.hdf5_keys = list(features.keys())
+                for key in features.keys():
+                    f.create_dataset(f'{i}/{key}', data=features[key])
+        return
+    
+    # create a lmdb file for the dataset, for faster loading
+    def create_lmdb(self, write_frequency=1000):
+        lmdb_path = self.data_file.replace('.csv', f'.{datetime.now()}.lmdb')
+        map_size = 5e12 # 5TB
+        db = lmdb.open(lmdb_path, subdir=False, map_size=map_size, readonly=False, meminit=False, map_async=True)
+        print(f"Begin loading {len(self)} points into lmdb")
+        txn = db.begin(write=True)
+        for idx in range(len(self)):
+            d = self.get(idx)
+            txn.put(u'{}'.format(idx).encode('ascii'), pickle.dumps(d))
+            print(f'Finished loading {idx}')
+            if (idx + 1) % write_frequency == 0:
+                txn.commit()
+                txn = db.begin(write=True)
+        txn.commit()
+        print(f"Finished loading {len(self)} points into lmdb")
+        self.lmdb_path = lmdb_path
+        self.lmdb_idx_map = np.arange(len(self))
+        self.get_method = 'lmdb'
+        print("Flushing database ...")
+        db.sync()
+        db.close()
+        return
+
+    # clean up hdf5 and lmdb files
+    def clean_up(self):
+        if hasattr(self, 'hdf5_file') and self.hdf5_file is not None and os.path.exists(self.hdf5_file):
+            os.remove(self.hdf5_file)
+        if hasattr(self, 'lmdb_path') and self.lmdb_path is not None and os.path.exists(self.lmdb_path):
+            os.remove(self.lmdb_path)
+        return
 
 
 class MutationDataset(GraphMutationDataset):
@@ -1522,6 +1848,10 @@ class GraphMultiOnesiteMutationDataset(GraphMutationDataset):
                  neighbor_type: Literal['KNN', 'radius', 'radius-KNN'] = 'KNN',
                  max_len = 2251,
                  convert_to_onesite: bool = False,
+                 add_af2_single: bool = False,
+                 add_af2_pairwise: bool = False,
+                 loaded_af2_single: bool = False,
+                 loaded_af2_pairwise: bool = False,
                  ):
         super(GraphMultiOnesiteMutationDataset, self).__init__(
             data_file, data_type, radius, max_neighbors, loop, shuffle, gpu_id,

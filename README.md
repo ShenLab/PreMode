@@ -2,6 +2,10 @@
 This is the repository for our manuscript "PreMode predicts mode of action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv.
 
 # Data
+Please use the git lfs to download all files in `data.files/` folder
+Unzip the files with this script
+
+
 Please unzip `MAVE.tgz`, `ICC.tgz`, `pathogenicity.tgz` and put them under your data directory.
 
 For use of `MAVE.tgz`, we curated from MAVEDB. (DOI: 10.1186/s13059-019-1845-6)
@@ -17,7 +21,7 @@ All config files were stored in `scripts/` folder.
 
 Here is the list of models in our manuscript:
 
-`scripts/CHPs.v4.SAGPool.ct/` PreMode (Note previously we used torch_lightning to control the random seeds, now we used numpy.seed and torch.seed, there might be a slight difference)
+`scripts/PreMode/` PreMode (Note previously we used torch_lightning to control the random seeds, now we used numpy.seed and torch.seed, there might be a slight difference), it takes 250 GB RAM and 4 A40 Nvidia GPUs to run, will finish in ~50h.
 
 `scripts/CHPs.v4.noGraph.SAGPool.ct/` PreMode-1D
 

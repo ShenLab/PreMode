@@ -573,7 +573,8 @@ class EquivariantWeightedPAEMultiHeadAttention(EquivariantMultiHeadAttention):
         return x, vec, attn
 
 
-class EquivariantPAEMultiHeadAttentionSoftMaxFullGraph(nn.Module):
+# archived, wrong implementation
+class EquivariantPAEMultiHeadAttentionSoftMaxFullGraph_archive(nn.Module):
     """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
     def __init__(
             self,
@@ -816,7 +817,486 @@ class EquivariantPAEMultiHeadAttentionSoftMaxFullGraph(nn.Module):
         return x_out, vec_out, attn_weights
 
 
-class PAEMultiHeadAttentionSoftMaxStarGraph(nn.Module):
+class EquivariantPAEMultiHeadAttentionSoftMaxFullGraph(nn.Module):
+    """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        # same as EquivariantPAEMultiHeadAttentionSoftMax, but apply attention on full graph by default
+        super(EquivariantPAEMultiHeadAttentionSoftMaxFullGraph, self).__init__()
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+        self.share_kv = share_kv
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.cutoff = None
+        self.scaling = self.x_head_dim**-0.5
+        if use_lora is not None:
+            self.q_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.k_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora) if not share_kv else None
+            self.v_proj = lora.Linear(x_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            self.o_proj = lora.Linear(x_hidden_channels, x_channels * 2 + vec_channels, r=use_lora)
+            self.vec_proj = lora.Linear(vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False, r=use_lora)
+        else:
+            self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.k_proj = nn.Linear(x_channels, x_hidden_channels) if not share_kv else None
+            self.v_proj = nn.Linear(x_channels, x_hidden_channels + vec_channels * 2)
+            self.o_proj = nn.Linear(x_hidden_channels, x_channels * 2 + vec_channels)
+            self.vec_proj = nn.Linear(vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False)
+
+        self.dk_proj = None
+        self.dk_dist_proj = None
+        self.dv_proj = None
+        self.dv_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_proj = lora.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+                self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_proj = nn.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2)
+                self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        # set PAE weight as a learnable parameter, basiclly a sigmoid function
+        self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.o_proj.weight)
+        self.o_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.vec_proj.weight)
+        self.pae_weight.weight.data.fill_(-0.5)
+        self.pae_weight.bias.data.fill_(7.5)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+        if self.dk_dist_proj:
+            nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+            self.dk_dist_proj.bias.data.fill_(0)
+        if self.dv_dist_proj:
+            nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+            self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, vec, edge_index, w_ij, f_dist_ij, f_ij, d_ij, plddt, key_padding_mask, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        # edge_index is unused
+        x = self.layernorm(x)
+        q = self.q_proj(x) * self.scaling
+        v = self.v_proj(x)
+        # if self.share_kv:
+        #     k = v[:, :, :self.x_head_dim]
+        # else:
+        k = self.k_proj(x)
+
+        vec1, vec2, vec3 = torch.split(self.vec_proj(vec),
+                                       [self.vec_hidden_channels, self.vec_hidden_channels, self.vec_channels], dim=-1)
+        vec_dot = (vec1 * vec2).sum(dim=-2)
+
+        dk = self.act(self.dk_proj(f_ij)) 
+        dk_dist = self.act(self.dk_dist_proj(f_dist_ij)) 
+        dv = self.act(self.dv_proj(f_ij))  
+        dv_dist = self.act(self.dv_dist_proj(f_dist_ij)) 
+
+        # full graph attention
+        x, vec, attn = self.attention(
+            q=q,
+            k=k,
+            v=v,
+            vec=vec,
+            dk=dk,
+            dk_dist=dk_dist,
+            dv=dv,
+            dv_dist=dv_dist,
+            d_ij=d_ij,
+            w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            key_padding_mask=key_padding_mask,
+        )
+        o1, o2, o3 = torch.split(self.o_proj(x), [self.vec_channels, self.x_channels, self.x_channels], dim=-1)
+        dx = vec_dot * o2 * plddt.unsqueeze(-1) + o3
+        dvec = vec3 * o1.unsqueeze(-2) * plddt.unsqueeze(-1).unsqueeze(-2) + vec
+        # apply key_padding_mask to dx
+        dx = dx.masked_fill(key_padding_mask.unsqueeze(-1), 0)
+        dvec = dvec.masked_fill(key_padding_mask.unsqueeze(-1).unsqueeze(-1), 0)
+        if return_attn:
+            return dx, dvec, attn
+        else:
+            return dx, dvec, None
+
+    def attention(self, q, k, v, vec, dk, dk_dist, dv, dv_dist, d_ij, w_ij, key_padding_mask=None, need_head_weights=False):
+        # note that q is of shape (bsz, tgt_len, num_heads * head_dim)
+        # k, v is of shape (bsz, src_len, num_heads * head_dim)
+        # vec is of shape (bsz, src_len, 3, num_heads * head_dim)
+        # dk, dk_dist, dv, dv_dist is of shape (bsz, tgt_len, src_len, num_heads * head_dim)
+        # d_ij is of shape (bsz, tgt_len, src_len, 3)
+        # w_ij is of shape (bsz, tgt_len, src_len)
+        # key_padding_mask is of shape (bsz, src_len)
+        bsz, tgt_len, _ = q.size()
+        src_len = k.size(1)
+        # change q size to (bsz * num_heads, tgt_len, head_dim)
+        # change k,v size to (bsz * num_heads, src_len, head_dim)
+        q = q.transpose(0, 1).reshape(tgt_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        k = k.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        v = v.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).transpose(0, 1).contiguous()
+        # change vec to (bsz * num_heads, src_len, 3, head_dim)
+        vec = vec.permute(1, 2, 0, 3).reshape(src_len, 3, bsz * self.num_heads, self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dk size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dk is not None:
+        # change dk to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk = dk.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dk_dist is not None:
+        # change dk_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk_dist = dk_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dv size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dv is not None:
+        # change dv to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv = dv.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dv_dist is not None:
+        # change dv_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv_dist = dv_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if key_padding_mask is not None:
+        # key_padding_mask should be (bsz, src_len)
+        assert key_padding_mask.size(0) == bsz
+        assert key_padding_mask.size(1) == src_len
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len, head_dim)
+        attn_weights = torch.multiply(q[:, :, None, :], k[:, None, :, :])
+        # w_ij is PAE confidence
+        # w_ij size is (bsz, tgt_len, src_len)
+        # change dimension of w_ij to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # if dk_dist is not None:
+        assert w_ij is not None
+        #     if dk is not None:
+        attn_weights *= (dk + dk_dist * w_ij[:, :, :, None].repeat(self.num_heads, 1, 1, self.x_head_dim))
+        # add dv and dv_dist
+        v = v.unsqueeze(1) + dv + dv_dist * w_ij[:, :, :, None].repeat(self.num_heads, 1, 1, self.x_head_dim + 2 * self.vec_head_dim)
+        #     else:
+        #         attn_weights *= dk_dist * w_ij
+        # else:
+        #     if dk is not None:
+        #         attn_weights *= dk
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.sum(dim=-1)
+        # apply key_padding_mask to attn_weights
+        # if key_padding_mask is not None:
+        # don't attend to padding symbols
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).contiguous()
+        attn_weights = attn_weights.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool), float("-inf")
+        )
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len).contiguous()
+        # apply softmax to attn_weights
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        # x, vec1, vec2 are of shape (bsz * num_heads, src_len, head_dim)
+        x, vec1, vec2 = torch.split(v, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=-1)
+        # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
+        x_out = torch.einsum('bts,btsh->bth', attn_weights, x)
+        # next get equivariant feature outputs vec_out_1, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        vec_out_1 = torch.einsum('bsih,btsh->btih', vec, vec1)
+        # next get equivariant feature outputs vec_out_2, size is (bsz * num_heads, tgt_len, src_len, 3, head_dim)
+        vec_out_2 = torch.einsum('btsi,btsh->btih', d_ij, vec2)
+        # adds up vec_out_1 and vec_out_2, get vec_out, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        vec_out = vec_out_1 + vec_out_2
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+        # if not need_head_weights:
+        # average attention weights over heads
+        attn_weights = attn_weights.mean(dim=0)
+        # reshape x_out to (bsz, tgt_len, num_heads * head_dim)
+        x_out = x_out.transpose(1, 0).reshape(tgt_len, bsz, self.num_heads * self.x_head_dim).transpose(1, 0).contiguous()
+        # reshape vec_out to (bsz, tgt_len, 3, num_heads * head_dim)
+        vec_out = vec_out.permute(1, 2, 0, 3).reshape(tgt_len, 3, bsz, self.num_heads * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        return x_out, vec_out, attn_weights
+
+
+class MultiHeadAttentionSoftMaxFullGraph(nn.Module):
+    """
+    Multi-head attention layer with softmax, apply attention on full graph by default
+    No equivariant property, but can take structure information as input, just didn't use it
+    """
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            attn_activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        # same as EquivariantPAEMultiHeadAttentionSoftMax, but apply attention on full graph by default
+        super(MultiHeadAttentionSoftMaxFullGraph, self).__init__()
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+        self.share_kv = share_kv
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.cutoff = None
+        self.scaling = self.x_head_dim**-0.5
+        if use_lora is not None:
+            self.q_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.k_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora) if not share_kv else None
+            self.v_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.o_proj = lora.Linear(x_hidden_channels, x_channels, r=use_lora)
+            # self.vec_proj = lora.Linear(vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False, r=use_lora)
+        else:
+            self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.k_proj = nn.Linear(x_channels, x_hidden_channels) if not share_kv else None
+            self.v_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.o_proj = nn.Linear(x_hidden_channels, x_channels)
+            # self.vec_proj = nn.Linear(vec_channels, vec_hidden_channels * 2 + vec_channels, bias=False)
+
+        self.dk_proj = None
+        self.dk_dist_proj = None
+        self.dv_proj = None
+        self.dv_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                # self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                # self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                # self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                # self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        # set PAE weight as a learnable parameter, basiclly a sigmoid function
+        # self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.o_proj.weight)
+        self.o_proj.bias.data.fill_(0)
+        # nn.init.xavier_uniform_(self.vec_proj.weight)
+        # self.pae_weight.weight.data.fill_(-0.5)
+        # self.pae_weight.bias.data.fill_(7.5)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+
+    def forward(self, x, vec, edge_index, w_ij, f_dist_ij, f_ij, d_ij, plddt, key_padding_mask, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        # edge_index is unused
+        x = self.layernorm(x)
+        q = self.q_proj(x) * self.scaling
+        v = self.v_proj(x)
+        # if self.share_kv:
+        #     k = v[:, :, :self.x_head_dim]
+        # else:
+        k = self.k_proj(x)
+
+        # vec1, vec2, vec3 = torch.split(self.vec_proj(vec),
+        #                                [self.vec_hidden_channels, self.vec_hidden_channels, self.vec_channels], dim=-1)
+        # vec_dot = (vec1 * vec2).sum(dim=-2)
+
+        dk = self.act(self.dk_proj(f_ij)) 
+        # dk_dist = self.act(self.dk_dist_proj(f_dist_ij)) 
+        dv = self.act(self.dv_proj(f_ij))  
+        # dv_dist = self.act(self.dv_dist_proj(f_dist_ij)) 
+
+        # full graph attention
+        x, vec, attn = self.attention(
+            q=q,
+            k=k,
+            v=v,
+            vec=vec,
+            dk=dk,
+            # dk_dist=dk_dist,
+            dv=dv,
+            # dv_dist=dv_dist,
+            # d_ij=d_ij,
+            # w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            key_padding_mask=key_padding_mask,
+        )
+        # o1, o2, o3 = torch.split(self.o_proj(x), [self.vec_channels, self.x_channels, self.x_channels], dim=-1)
+        # dx = vec_dot * o2 * plddt.unsqueeze(-1) + o3
+        dx = self.o_proj(x)
+        # dvec = vec3 * o1.unsqueeze(-2) * plddt.unsqueeze(-1).unsqueeze(-2) + vec
+        # apply key_padding_mask to dx
+        dx = dx.masked_fill(key_padding_mask.unsqueeze(-1), 0)
+        # dvec = dvec.masked_fill(key_padding_mask.unsqueeze(-1).unsqueeze(-1), 0)
+        if return_attn:
+            return dx, vec, attn
+        else:
+            return dx, vec, None
+
+    def attention(self, q, k, v, vec, dk, dv, key_padding_mask=None, need_head_weights=False):
+        # note that q is of shape (bsz, tgt_len, num_heads * head_dim)
+        # k, v is of shape (bsz, src_len, num_heads * head_dim)
+        # vec is of shape (bsz, src_len, 3, num_heads * head_dim)
+        # dk, dk_dist, dv, dv_dist is of shape (bsz, tgt_len, src_len, num_heads * head_dim)
+        # d_ij is of shape (bsz, tgt_len, src_len, 3)
+        # w_ij is of shape (bsz, tgt_len, src_len)
+        # key_padding_mask is of shape (bsz, src_len)
+        bsz, tgt_len, _ = q.size()
+        src_len = k.size(1)
+        # change q size to (bsz * num_heads, tgt_len, head_dim)
+        # change k,v size to (bsz * num_heads, src_len, head_dim)
+        q = q.transpose(0, 1).reshape(tgt_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        k = k.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        v = v.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        # change vec to (bsz * num_heads, src_len, 3, head_dim)
+        # vec = vec.permute(1, 2, 0, 3).reshape(src_len, 3, bsz * self.num_heads, self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dk size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dk is not None:
+        # change dk to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk = dk.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dk_dist is not None:
+        # change dk_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # dk_dist = dk_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dv size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dv is not None:
+        # change dv to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv = dv.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dv_dist is not None:
+        # change dv_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # dv_dist = dv_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if key_padding_mask is not None:
+        # key_padding_mask should be (bsz, src_len)
+        assert key_padding_mask.size(0) == bsz
+        assert key_padding_mask.size(1) == src_len
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len, head_dim)
+        attn_weights = torch.multiply(q[:, :, None, :], k[:, None, :, :])
+        # w_ij is PAE confidence
+        # w_ij size is (bsz, tgt_len, src_len)
+        # change dimension of w_ij to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # if dk_dist is not None:
+        # assert w_ij is not None
+        #     if dk is not None:
+        attn_weights *= dk
+        # add dv and dv_dist
+        v = v.unsqueeze(1) + dv
+        #     else:
+        #         attn_weights *= dk_dist * w_ij
+        # else:
+        #     if dk is not None:
+        #         attn_weights *= dk
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.sum(dim=-1)
+        # apply key_padding_mask to attn_weights
+        # if key_padding_mask is not None:
+        # don't attend to padding symbols
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).contiguous()
+        attn_weights = attn_weights.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool), float("-inf")
+        )
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len).contiguous()
+        # apply softmax to attn_weights
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        # x, vec1, vec2 are of shape (bsz * num_heads, src_len, head_dim)
+        # x, vec1, vec2 = torch.split(v, [self.x_head_dim, self.vec_head_dim, self.vec_head_dim], dim=-1)
+        # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
+        x_out = torch.einsum('bts,btsh->bth', attn_weights, v)
+        # next get equivariant feature outputs vec_out_1, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        # vec_out_1 = torch.einsum('bsih,btsh->btih', vec, vec1)
+        # next get equivariant feature outputs vec_out_2, size is (bsz * num_heads, tgt_len, src_len, 3, head_dim)
+        # vec_out_2 = torch.einsum('btsi,btsh->btih', d_ij, vec2)
+        # adds up vec_out_1 and vec_out_2, get vec_out, size is (bsz * num_heads, tgt_len, 3, head_dim)
+        # vec_out = vec_out_1 + vec_out_2
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+        # if not need_head_weights:
+        # average attention weights over heads
+        attn_weights = attn_weights.mean(dim=0)
+        # reshape x_out to (bsz, tgt_len, num_heads * head_dim)
+        x_out = x_out.transpose(1, 0).reshape(tgt_len, bsz, self.num_heads * self.x_head_dim).transpose(1, 0).contiguous()
+        # reshape vec_out to (bsz, tgt_len, 3, num_heads * head_dim)
+        # vec_out = vec_out.permute(1, 2, 0, 3).reshape(tgt_len, 3, bsz, self.num_heads * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        return x_out, vec, attn_weights
+
+
+# archived, wrong implementation
+class PAEMultiHeadAttentionSoftMaxStarGraph_archive(nn.Module):
     """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
     def __init__(
             self,
@@ -1014,6 +1494,422 @@ class PAEMultiHeadAttentionSoftMaxStarGraph(nn.Module):
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
         # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
         x_out = torch.bmm(attn_weights, v)
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+        # if not need_head_weights:
+        # average attention weights over heads
+        attn_weights = attn_weights.mean(dim=0)
+        # reshape x_out to (bsz, tgt_len, num_heads * head_dim)
+        x_out = x_out.transpose(1, 0).reshape(tgt_len, bsz, self.num_heads * self.x_head_dim).transpose(1, 0).contiguous()
+        return x_out, attn_weights
+
+
+class PAEMultiHeadAttentionSoftMaxStarGraph(nn.Module):
+    """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        # same as EquivariantPAEMultiHeadAttentionSoftMax, but apply attention on full graph by default
+        super(PAEMultiHeadAttentionSoftMaxStarGraph, self).__init__()
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+        self.share_kv = share_kv
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.cutoff = None
+        self.scaling = self.x_head_dim**-0.5
+        if use_lora is not None:
+            self.q_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.k_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora) if not share_kv else None
+            self.v_proj = lora.Linear(x_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+        else:
+            self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.k_proj = nn.Linear(x_channels, x_hidden_channels) if not share_kv else None
+            self.v_proj = nn.Linear(x_channels, x_hidden_channels)
+
+        self.dk_proj = None
+        self.dk_dist_proj = None
+        self.dv_proj = None
+        self.dv_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_proj = lora.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+                self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_proj = nn.Linear(edge_attr_channels, x_hidden_channels + vec_channels * 2)
+                self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        # set PAE weight as a learnable parameter, basiclly a sigmoid function
+        self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        self.pae_weight.weight.data.fill_(-0.5)
+        self.pae_weight.bias.data.fill_(7.5)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+        if self.dk_dist_proj:
+            nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+            self.dk_dist_proj.bias.data.fill_(0)
+        if self.dv_dist_proj:
+            nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+            self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, x_center_index, w_ij, f_dist_ij, f_ij, key_padding_mask, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        # edge_index is unused
+        x = self.layernorm(x)
+        q = self.q_proj(x[x_center_index].unsqueeze(1)) * self.scaling
+        v = self.v_proj(x)
+        # if self.share_kv:
+        #     k = v[:, :, :self.x_head_dim]
+        # else:
+        k = self.k_proj(x)
+
+        dk = self.act(self.dk_proj(f_ij)) 
+        dk_dist = self.act(self.dk_dist_proj(f_dist_ij)) 
+        dv = self.act(self.dv_proj(f_ij)) 
+        dv_dist = self.act(self.dv_dist_proj(f_dist_ij)) 
+
+        # full graph attention
+        x, attn = self.attention(
+            q=q,
+            k=k,
+            v=v,
+            dk=dk,
+            dk_dist=dk_dist,
+            dv=dv,
+            dv_dist=dv_dist,
+            w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            key_padding_mask=key_padding_mask,
+        )
+        if return_attn:
+            return x, attn
+        else:
+            return x, None
+
+    def attention(self, q, k, v, dk, dk_dist, dv, dv_dist, w_ij, key_padding_mask=None, need_head_weights=False):
+        # note that q is of shape (bsz, tgt_len, num_heads * head_dim)
+        # k, v is of shape (bsz, src_len, num_heads * head_dim)
+        # vec is of shape (bsz, src_len, 3, num_heads * head_dim)
+        # dk, dk_dist, dv, dv_dist is of shape (bsz, tgt_len, src_len, num_heads * head_dim)
+        # d_ij is of shape (bsz, tgt_len, src_len, 3)
+        # w_ij is of shape (bsz, tgt_len, src_len)
+        # key_padding_mask is of shape (bsz, src_len)
+        bsz, tgt_len, _ = q.size()
+        src_len = k.size(1)
+        # change q size to (bsz * num_heads, tgt_len, head_dim)
+        # change k,v size to (bsz * num_heads, src_len, head_dim)
+        q = q.transpose(0, 1).reshape(tgt_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        k = k.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        v = v.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        # dk size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dk is not None:
+        # change dk to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk = dk.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dk_dist is not None:
+        # change dk_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk_dist = dk_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dv size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dv is not None:
+        # change dv to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv = dv.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dv_dist is not None:
+        # change dv_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv_dist = dv_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if key_padding_mask is not None:
+        # key_padding_mask should be (bsz, src_len)
+        assert key_padding_mask.size(0) == bsz
+        assert key_padding_mask.size(1) == src_len
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len, head_dim)
+        attn_weights = torch.multiply(q[:, :, None, :], k[:, None, :, :])
+        # w_ij is PAE confidence
+        # w_ij size is (bsz, tgt_len, src_len)
+        # change dimension of w_ij to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # if dk_dist is not None:
+        assert w_ij is not None
+        #     if dk is not None:
+        attn_weights *= (dk + dk_dist * w_ij[:, :, :, None].repeat(self.num_heads, 1, 1, self.x_head_dim))
+        # add dv and dv_dist
+        v = v.unsqueeze(1) + dv + dv_dist * w_ij[:, :, :, None].repeat(self.num_heads, 1, 1, self.x_head_dim + 2 * self.vec_head_dim)
+        #     else:
+        #         attn_weights *= dk_dist * w_ij
+        # else:
+        #     if dk is not None:
+        #         attn_weights *= dk
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.sum(dim=-1)
+        # apply key_padding_mask to attn_weights
+        # if key_padding_mask is not None:
+        # don't attend to padding symbols
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).contiguous()
+        attn_weights = attn_weights.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool), float("-inf")
+        )
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len).contiguous()
+        # apply softmax to attn_weights
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
+        x_out = torch.einsum('bts,btsh->bth', attn_weights, v)
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+        # if not need_head_weights:
+        # average attention weights over heads
+        attn_weights = attn_weights.mean(dim=0)
+        # reshape x_out to (bsz, tgt_len, num_heads * head_dim)
+        x_out = x_out.transpose(1, 0).reshape(tgt_len, bsz, self.num_heads * self.x_head_dim).transpose(1, 0).contiguous()
+        return x_out, attn_weights
+
+
+class MultiHeadAttentionSoftMaxStarGraph(nn.Module):
+    """Equivariant multi-head attention layer with softmax, apply attention on full graph by default"""
+    def __init__(
+            self,
+            x_channels,
+            x_hidden_channels,
+            vec_channels,
+            vec_hidden_channels,
+            share_kv,
+            edge_attr_channels,
+            edge_attr_dist_channels,
+            distance_influence,
+            num_heads,
+            activation,
+            cutoff_lower,
+            cutoff_upper,
+            use_lora=None,
+    ):
+        # same as EquivariantPAEMultiHeadAttentionSoftMax, but apply attention on full graph by default
+        super(MultiHeadAttentionSoftMaxStarGraph, self).__init__()
+        assert x_hidden_channels % num_heads == 0 \
+            and vec_channels % num_heads == 0, (
+                f"The number of hidden channels x_hidden_channels ({x_hidden_channels}) "
+                f"and vec_channels ({vec_channels}) "
+                f"must be evenly divisible by the number of "
+                f"attention heads ({num_heads})"
+            )
+        assert vec_hidden_channels == x_channels, (
+            f"The number of hidden channels x_channels ({x_channels}) "
+            f"and vec_hidden_channels ({vec_hidden_channels}) "
+            f"must be equal"
+        )
+
+        self.distance_influence = distance_influence
+        self.num_heads = num_heads
+        self.x_channels = x_channels
+        self.x_hidden_channels = x_hidden_channels
+        self.x_head_dim = x_hidden_channels // num_heads
+        self.vec_channels = vec_channels
+        self.vec_hidden_channels = vec_hidden_channels
+        # important, not vec_hidden_channels // num_heads
+        self.vec_head_dim = vec_channels // num_heads
+        self.share_kv = share_kv
+        self.layernorm = nn.LayerNorm(x_channels)
+        self.act = activation()
+        self.cutoff = None
+        self.scaling = self.x_head_dim**-0.5
+        if use_lora is not None:
+            self.q_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+            self.k_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora) if not share_kv else None
+            self.v_proj = lora.Linear(x_channels, x_hidden_channels, r=use_lora)
+        else:
+            self.q_proj = nn.Linear(x_channels, x_hidden_channels)
+            self.k_proj = nn.Linear(x_channels, x_hidden_channels) if not share_kv else None
+            self.v_proj = nn.Linear(x_channels, x_hidden_channels)
+
+        self.dk_proj = None
+        # self.dk_dist_proj = None
+        self.dv_proj = None
+        # self.dv_dist_proj = None
+        if distance_influence in ["keys", "both"]:
+            if use_lora is not None:
+                self.dk_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                # self.dk_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels, r=use_lora)
+            else:
+                self.dk_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                # self.dk_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels)
+
+        if distance_influence in ["values", "both"]:
+            if use_lora is not None:
+                self.dv_proj = lora.Linear(edge_attr_channels, x_hidden_channels, r=use_lora)
+                # self.dv_dist_proj = lora.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2, r=use_lora)
+            else:
+                self.dv_proj = nn.Linear(edge_attr_channels, x_hidden_channels)
+                # self.dv_dist_proj = nn.Linear(edge_attr_dist_channels, x_hidden_channels + vec_channels * 2)
+        # set PAE weight as a learnable parameter, basiclly a sigmoid function
+        # self.pae_weight = nn.Linear(1, 1, bias=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.layernorm.reset_parameters()
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        self.k_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.v_proj.bias.data.fill_(0)
+        # self.pae_weight.weight.data.fill_(-0.5)
+        # self.pae_weight.bias.data.fill_(7.5)
+        if self.dk_proj:
+            nn.init.xavier_uniform_(self.dk_proj.weight)
+            self.dk_proj.bias.data.fill_(0)
+        if self.dv_proj:
+            nn.init.xavier_uniform_(self.dv_proj.weight)
+            self.dv_proj.bias.data.fill_(0)
+        # if self.dk_dist_proj:
+        #     nn.init.xavier_uniform_(self.dk_dist_proj.weight)
+        #     self.dk_dist_proj.bias.data.fill_(0)
+        # if self.dv_dist_proj:
+        #     nn.init.xavier_uniform_(self.dv_dist_proj.weight)
+        #     self.dv_dist_proj.bias.data.fill_(0)
+
+    def forward(self, x, x_center_index, w_ij, f_dist_ij, f_ij, key_padding_mask, return_attn=False):
+        # we replaced r_ij to w_ij as pair-wise confidence
+        # we add plddt as position-wise confidence
+        # edge_index is unused
+        x = self.layernorm(x)
+        q = self.q_proj(x[x_center_index].unsqueeze(1)) * self.scaling
+        v = self.v_proj(x)
+        # if self.share_kv:
+        #     k = v[:, :, :self.x_head_dim]
+        # else:
+        k = self.k_proj(x)
+
+        dk = self.act(self.dk_proj(f_ij)) 
+        # dk_dist = self.act(self.dk_dist_proj(f_dist_ij)) 
+        dv = self.act(self.dv_proj(f_ij)) 
+        # dv_dist = self.act(self.dv_dist_proj(f_dist_ij)) 
+
+        # full graph attention
+        x, attn = self.attention(
+            q=q,
+            k=k,
+            v=v,
+            dk=dk,
+            # dk_dist=dk_dist,
+            dv=dv,
+            # dv_dist=dv_dist,
+            # w_ij=nn.functional.sigmoid(self.pae_weight(w_ij.unsqueeze(-1)).squeeze(-1)),
+            key_padding_mask=key_padding_mask,
+        )
+        if return_attn:
+            return x, attn
+        else:
+            return x, None
+
+    def attention(self, q, k, v, dk, dv, key_padding_mask=None, need_head_weights=False):
+        # note that q is of shape (bsz, tgt_len, num_heads * head_dim)
+        # k, v is of shape (bsz, src_len, num_heads * head_dim)
+        # vec is of shape (bsz, src_len, 3, num_heads * head_dim)
+        # dk, dk_dist, dv, dv_dist is of shape (bsz, tgt_len, src_len, num_heads * head_dim)
+        # d_ij is of shape (bsz, tgt_len, src_len, 3)
+        # w_ij is of shape (bsz, tgt_len, src_len)
+        # key_padding_mask is of shape (bsz, src_len)
+        bsz, tgt_len, _ = q.size()
+        src_len = k.size(1)
+        # change q size to (bsz * num_heads, tgt_len, head_dim)
+        # change k,v size to (bsz * num_heads, src_len, head_dim)
+        q = q.transpose(0, 1).reshape(tgt_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        k = k.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        v = v.transpose(0, 1).reshape(src_len, bsz * self.num_heads, self.x_head_dim).transpose(0, 1).contiguous()
+        # dk size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dk is not None:
+        # change dk to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dk = dk.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dk_dist is not None:
+        # change dk_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # dk_dist = dk_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # dv size is (bsz, tgt_len, src_len, num_heads * head_dim)
+        # if dv is not None:
+        # change dv to (bsz * num_heads, tgt_len, src_len, head_dim)
+        dv = dv.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if dv_dist is not None:
+        # change dv_dist to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # dv_dist = dv_dist.permute(1, 2, 0, 3).reshape(tgt_len, src_len, bsz * self.num_heads, self.x_head_dim + 2 * self.vec_head_dim).permute(2, 0, 1, 3).contiguous()
+        # if key_padding_mask is not None:
+        # key_padding_mask should be (bsz, src_len)
+        assert key_padding_mask.size(0) == bsz
+        assert key_padding_mask.size(1) == src_len
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len, head_dim)
+        attn_weights = torch.multiply(q[:, :, None, :], k[:, None, :, :])
+        # w_ij is PAE confidence
+        # w_ij size is (bsz, tgt_len, src_len)
+        # change dimension of w_ij to (bsz * num_heads, tgt_len, src_len, head_dim)
+        # if dk_dist is not None:
+        # assert w_ij is not None
+        #     if dk is not None:
+        attn_weights *= dk
+        # add dv and dv_dist
+        v = v.unsqueeze(1) + dv
+        #     else:
+        #         attn_weights *= dk_dist * w_ij
+        # else:
+        #     if dk is not None:
+        #         attn_weights *= dk
+        # attn_weights size is (bsz * num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.sum(dim=-1)
+        # apply key_padding_mask to attn_weights
+        # if key_padding_mask is not None:
+        # don't attend to padding symbols
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).contiguous()
+        attn_weights = attn_weights.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool), float("-inf")
+        )
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len).contiguous()
+        # apply softmax to attn_weights
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        # first get invariant feature outputs x, size is (bsz * num_heads, tgt_len, head_dim)
+        x_out = torch.einsum('bts,btsh->bth', attn_weights, v)
         attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
         # if not need_head_weights:
         # average attention weights over heads

@@ -11,6 +11,8 @@ tmp.*
 README.new.md
 ICC.test.AUC.by.fold.archive.R
 .vscode
+data.files/
+analysis/
 *.log*.txt
 *.out
 *.log

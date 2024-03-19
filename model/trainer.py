@@ -442,7 +442,7 @@ class PreMode_trainer(object):
                 if hasattr(batch, 'score_mask'):
                     loss_y = self.loss_fn(input=y, 
                                           target=batch.y.to(self.device, non_blocking=True), 
-                                          weight=batch.score_mask.to(self.device, non_blocking=True)) + y * 0
+                                          weight=batch.score_mask.to(self.device, non_blocking=True))
                 else:
                     loss_y = self.loss_fn(y, batch.y.to(self.device, non_blocking=True))
                 if loss_y.ndim > 0:
@@ -484,6 +484,9 @@ class PreMode_trainer(object):
         self.scheduler.step(val_loss)
 
     def training_epoch_begin(self):
+        if hasattr(self.dataset, 'env') and self.dataset.env is not None:
+            self.dataset.env.close()
+            self.dataset.env = None
         self.train_iterator = iter(self.train_dataloader)
         # set model to train mode
         self.model.train()
@@ -792,7 +795,7 @@ class PreMode_trainer(object):
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '15423'
+    os.environ['MASTER_PORT'] = '15443'
     # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
@@ -1038,6 +1041,8 @@ def data_distributed_parallel_gpu(rank, model, hparams, dataset_att, dataset_ext
                     trainer.write_model(epoch=trainer.current_epoch, save_optimizer=True, optimizer_rank=rank)
                 else:
                     trainer.write_optimizer(epoch=trainer.current_epoch, optimizer_rank=rank)
+    # delete any hdf5 files or lmdb files generated in trainer.dataset
+    trainer.dataset.clean_up()
     cleanup()
     # return all_losses
     return trainer
@@ -1061,11 +1066,11 @@ def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint
     save_every_epoch = hparams.num_save_epochs
     device = f'cuda:{rank}'
     torch.cuda.set_per_process_memory_fraction(1.0, rank)
-    if hparams.dataset.startswith("FullGraph"):
-        model = torch.compile(model.to(device))
-        print(f'Compiled model in rank {rank}')
-    else:
-        model = model.to(device)
+    # if hparams.dataset.startswith("FullGraph"):
+    #     model = torch.compile(model.to(device))
+    #     print(f'Compiled model in rank {rank}')
+    # else:
+    model = model.to(device)
     model.train()
     
     trainer = trainer_fn(hparams=hparams, model=model, dataset=dataset, device_id=rank)
@@ -1172,6 +1177,8 @@ def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint
         if trainer.current_epoch % save_every_epoch == 0:
             trainer.write_model(epoch=trainer.current_epoch, save_optimizer=True, optimizer_rank=rank)
     # return all_losses
+    # clean up the dataset
+    trainer.dataset.clean_up()
     return trainer
 
 

@@ -6,23 +6,25 @@ result.plot <- result.plot[result.plot$task.type %in% c("Gene"),]
 
 result.plot <- result.plot[result.plot$model %in% c("PreMode.inference/",
                                                     # "PreMode.PRE.v8/",
-                                                    "PRE.v10/",
-                                                    "PRE.v10.noconfidence/",
-                                                    "PRE.v11/",
-                                                    "PRE.v9/",
-                                                    "PRE.v9.noconfidence/"
-                                                    # "PreMode.noMSA.inference/",
-                                                    # "PreMode.noStructure/",
-                                                    # "PreMode.ptm/",
-                                                    # "PreMode.onehot.inference/"
+                                                    # "PRE.v10/",
+                                                    # "PRE.v10.noconfidence/",
+                                                    # "PRE.v11/",
+                                                    # "PRE.v9/",
+                                                    # "PRE.v9.noconfidence/",
+                                                    # "PreMode.CHPs.v4.af2.rep/",
+                                                    "PreMode.noMSA.inference/",
+                                                    "PreMode.noStructure/",
+                                                    "PreMode.ptm/",
+                                                    "PreMode.onehot.inference/"
                                                     ),]
-model.dic <- c("PreMode.inference/"="1: PreMode (small)",
+model.dic <- c("PreMode.inference/"="1: PreMode",
                "PreMode.PRE.v8/"="2: PreMode (big.2)",
                "PRE.v10/"="02: PreMode (v10)",
                "PRE.v10.noconfidence/"="02: PreMode (v10.noconfidence)",
                "PRE.v11/"="02: PreMode (v11)",
                "PRE.v9/"="02: PreMode (v9)",
                "PRE.v9.noconfidence/"="02: PreMode (v9.noconfidence)",
+               "PreMode.CHPs.v4.af2.rep/"="02: PreMode (af2.rep)",
                "PreMode.ptm/"="2: PreMode: add ptm",
                "PreMode.noMSA.inference/"="3: PreMode: no MSA",
                "PreMode.onehot.inference/"="4: PreMode: no ESM",
@@ -41,8 +43,10 @@ p <- ggplot(result.plot, aes(y=auc, x=task.name, col=model)) +
                    y = auc, col=model), 
                fun.data = mean_se, geom = "point") +
   labs(x = "task", y = "auc", fill = "model") +
-  theme_bw() + 
+  theme_bw() + ggtitle('PreMode ablation analysis') +
+  ggeasy::easy_center_title() +
   theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
+        text = element_text(size = 13),
         legend.position="bottom", 
         legend.direction="horizontal") +
   coord_flip() + guides(col=guide_legend(ncol=2)) +

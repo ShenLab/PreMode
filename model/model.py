@@ -70,6 +70,11 @@ def create_model(args, model_class="PreMode"):
         model_fn = eqStar2FullGraphPAETransformerSoftMax
         shared_args["use_lora"]=args["use_lora"]
         shared_args["share_kv"]=args["share_kv"]
+    elif args["model"] == "transformer-fullgraph-softmax":
+        from model.module.representation import FullGraphPAETransformerSoftMax
+        model_fn = FullGraphPAETransformerSoftMax
+        shared_args["use_lora"]=args["use_lora"]
+        shared_args["share_kv"]=args["share_kv"]
     elif args["model"] == "equivariant-triangular-attention-transformer":
         from model.module.representation import eqTriAttnTransformer
         model_fn = eqTriAttnTransformer
@@ -150,10 +155,15 @@ def create_model_and_load(args, model_class="PreMode"):
     output_model_state_dict = {}
     representation_model_state_dict = {}
     for key in state_dict.keys():
-        if key.startswith("output_model"):
-            output_model_state_dict[key.replace("output_model.", "")] = state_dict[key]
-        elif key.startswith("representation_model"):
-            if key.startswith("representation_model.node_x_proj.weight"):
+        # delete _orig_mod
+        if key.startswith("_orig_mod"):
+            newkey = key.replace("_orig_mod.", "")
+        else:
+            newkey = key
+        if newkey.startswith("output_model"):
+            output_model_state_dict[newkey.replace("output_model.", "")] = state_dict[key]
+        elif newkey.startswith("representation_model"):
+            if newkey.startswith("representation_model.node_x_proj.weight"):
                 if args["partial_load_model"]:
                     embedding_weight = state_dict[key]
                     print('only use the first 26 embedding of MaskPredict')
@@ -165,31 +175,39 @@ def create_model_and_load(args, model_class="PreMode"):
                     representation_model_state_dict["node_x_proj.bias"] = \
                         torch.zeros(args["x_channels"])
                 else:
-                    representation_model_state_dict[key.replace("representation_model.", "")] = state_dict[key]
+                    representation_model_state_dict[newkey.replace("representation_model.", "")] = state_dict[key]
             else:
-                representation_model_state_dict[key.replace("representation_model.", "")] = state_dict[key]
+                representation_model_state_dict[newkey.replace("representation_model.", "")] = state_dict[key]
     model.representation_model.load_state_dict(representation_model_state_dict, strict=False)
     if args["data_type"] == "ClinVar" \
         or args['loss_fn'] == "combined_loss" \
-        or args['loss_fn'] == "weighted_combined_loss":
+        or args['loss_fn'] == "weighted_combined_loss" \
+        or args['use_output_head']:
         # or args['loss_fn'] == "weighted_loss":
         try:
             # check the output network module dimension
             if output_model_state_dict['output_network.0.weight'].shape[0] != args['output_dim']:
-                print('Warning: output network module dimension is not equal to output_dim, now changing the dimension')
-                output_network_weight = torch.concat(
-                    (output_model_state_dict['output_network.0.weight'],
-                     torch.zeros(args['output_dim'] - output_model_state_dict['output_network.0.weight'].shape[0], 
-                                 output_model_state_dict['output_network.0.weight'].shape[1])
-                     )
-                )
-                output_network_bias = torch.concat(
-                    (output_model_state_dict['output_network.0.bias'],
-                     torch.zeros(args['output_dim'] - output_model_state_dict['output_network.0.bias'].shape[0])
-                     )
-                )
-                output_model_state_dict['output_network.0.weight'] = output_network_weight
-                output_model_state_dict['output_network.0.bias'] = output_network_bias
+                # if output network is EquivariantAttnOneSiteScalar, we can use it
+                if "OneSite" in args['output_model'] and args['use_output_head']:
+                    rep_time = args['output_dim'] // output_model_state_dict['output_network.0.weight'].shape[0] 
+                    # repeat the weight and bias repeat_interleave
+                    output_model_state_dict['output_network.0.weight'] = output_model_state_dict['output_network.0.weight'].repeat_interleave(rep_time, 0)
+                    output_model_state_dict['output_network.0.bias'] = output_model_state_dict['output_network.0.bias'].repeat_interleave(rep_time)
+                else:
+                    print('Warning: output network module dimension is not equal to output_dim, now changing the dimension')
+                    output_network_weight = torch.concat(
+                        (output_model_state_dict['output_network.0.weight'],
+                        torch.zeros(args['output_dim'] - output_model_state_dict['output_network.0.weight'].shape[0], 
+                                    output_model_state_dict['output_network.0.weight'].shape[1])
+                        )
+                    )
+                    output_network_bias = torch.concat(
+                        (output_model_state_dict['output_network.0.bias'],
+                        torch.zeros(args['output_dim'] - output_model_state_dict['output_network.0.bias'].shape[0])
+                        )
+                    )
+                    output_model_state_dict['output_network.0.weight'] = output_network_weight
+                    output_model_state_dict['output_network.0.bias'] = output_network_bias
                 model.output_model.load_state_dict(output_model_state_dict, strict=False)
             print(f"loaded the output model state dict including the output module")
         except RuntimeError:
@@ -509,8 +527,10 @@ class PreMode_Star_CON(nn.Module):
             isinstance(self.representation_model, eqStar2WeightedPAETransformerSoftMax) or \
             isinstance(self.representation_model, eqStar2FullGraphPAETransformerSoftMax):
             # means we are using PAE model
-            input["plddt"] = extra_args["plddt"].to(x.device, non_blocking=True)
-            input["edge_confidence"] = extra_args["edge_confidence"].to(x.device, non_blocking=True)
+            input["plddt"] = extra_args["plddt"].to(x.device, non_blocking=True) \
+                if "plddt" in extra_args else None
+            input["edge_confidence"] = extra_args["edge_confidence"].to(x.device, non_blocking=True) \
+                if "edge_confidence" in extra_args else None
             input["edge_confidence_star"] = extra_args["edge_confidence_star"].to(x.device, non_blocking=True) \
                 if "edge_confidence_star" in extra_args else None
         x, v, pos, edge_attr, batch, attn_weight_layers = self.representation_model(**input)
@@ -543,7 +563,8 @@ class PreMode_Star_CON(nn.Module):
                 x, (~x_mask).squeeze(2),
                 edge_attr[0], edge_attr[1], edge_attr[2], edge_attr[3], 
                 input["x_padding_mask"])
-            x.squeeze(1)
+            if 'score_mask' not in extra_args:
+                x = x.unsqueeze(1)
         # x = self.output_model.reduce(x, edge_index, edge_attr, batch)
         attn_weight_layers.append(attn_out)
         # apply output model after reduction

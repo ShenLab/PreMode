@@ -85,6 +85,20 @@ for (i in 1:length(genes)) {
         # get train val split
         baseline.result.2 <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
                                              '/testing.fold.', fold, '.csv'))
+        # add hsu et al result
+        # add hsu et al results
+        hsu.unirep_onehot.auc <- list(R2=c())
+        hsu.ev_onehot.auc <- list(R2=c())
+        hsu.gesm_onehot.auc <- list(R2=c())
+        hsu.eve_onehot.auc <- list(R2=c())
+        for (s in 1:task.length) {
+          test.result.hsu <- read.csv(paste0('/share/vault/Users/gz2294/combining-evolutionary-and-assay-labelled-data/results/', 
+                                             genes[i], '.fold.', fold, '.score.', s, '/results.csv'))
+          hsu.unirep_onehot.auc$R2 <- c(hsu.unirep_onehot.auc$R2, test.result.hsu$spearman[match('eunirep_ll+onehot', test.result.hsu$predictor)])
+          hsu.ev_onehot.auc$R2 <- c(hsu.ev_onehot.auc$R2, test.result.hsu$spearman[match('ev+onehot', test.result.hsu$predictor)])
+          hsu.gesm_onehot.auc$R2 <- c(hsu.gesm_onehot.auc$R2, test.result.hsu$spearman[match('gesm+onehot', test.result.hsu$predictor)])
+          hsu.eve_onehot.auc$R2 <- c(hsu.eve_onehot.auc$R2, test.result.hsu$spearman[match('vae+onehot', test.result.hsu$predictor)])
+        }
       } else {
         test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
                                        '/testing.subset.', subset, '.fold.', fold, '.csv'))
@@ -94,6 +108,19 @@ for (i in 1:length(genes)) {
                                                genes[i], '.subsets/subset.', subset, '/seed.', fold, '.yaml'))
         baseline.result.2 <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
                                              '/testing.subset.', subset, '.fold.', fold, '.csv'))
+        # add hsu et al results
+        hsu.unirep_onehot.auc <- list(R2=c())
+        hsu.ev_onehot.auc <- list(R2=c())
+        hsu.gesm_onehot.auc <- list(R2=c())
+        hsu.eve_onehot.auc <- list(R2=c())
+        for (s in 1:task.length) {
+          test.result.hsu <- read.csv(paste0('/share/vault/Users/gz2294/combining-evolutionary-and-assay-labelled-data/results/', 
+                                             genes[i], '.subset.', subset, '.fold.', fold, '.score.', s, '/results.csv'))
+          hsu.unirep_onehot.auc$R2 <- c(hsu.unirep_onehot.auc$R2, test.result.hsu$spearman[match('eunirep_ll+onehot', test.result.hsu$predictor)])
+          hsu.ev_onehot.auc$R2 <- c(hsu.ev_onehot.auc$R2, test.result.hsu$spearman[match('ev+onehot', test.result.hsu$predictor)])
+          hsu.gesm_onehot.auc$R2 <- c(hsu.gesm_onehot.auc$R2, test.result.hsu$spearman[match('gesm+onehot', test.result.hsu$predictor)])
+          hsu.eve_onehot.auc$R2 <- c(hsu.eve_onehot.auc$R2, test.result.hsu$spearman[match('vae+onehot', test.result.hsu$predictor)])
+        }
       }
       np <- reticulate::import('numpy')
       train.val.split <- np$load(paste0(train.config$log_dir, 'splits.0.npz'))
@@ -139,13 +166,22 @@ for (i in 1:length(genes)) {
       to.append <- data.frame(min.val.R = c(PreMode.auc$R2,
                                             baseline.auc.3$R2,
                                             baseline.auc.4$R2,
-                                            baseline.auc.2$R2
+                                            baseline.auc.2$R2,
+                                            hsu.gesm_onehot.auc$R2,
+                                            hsu.ev_onehot.auc$R2,
+                                            hsu.unirep_onehot.auc$R2,
+                                            hsu.eve_onehot.auc$R2
       ),
-      task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 4)))
+      task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 8)))
       to.append$model <- rep(c("PreMode",
                                "Elastic Net",
                                "Random Forest",
-                               "ESM + SLR"
+                               "ESM + SLR",
+                               "Augmented ESM1b",
+                               "Augmented EVmutation",
+                               "Augmented Unirep",
+                               "Augmented EVE"
+                               
       ), each = task.length)
       to.append$subset <- subset
       to.append$seed <- fold
@@ -192,17 +228,17 @@ for (i in 1:length(task.dic)) {
       ggtitle(paste0(task, ":", model)) + ggeasy::easy_center_title() + xlab("training data size (%)")
     task.plots[[k]] <- p
   }
-  plots[[i]] <- task.plots[[1]] + task.plots[[2]] + task.plots[[3]]
+  plots[[i]] <- task.plots[[1]] + task.plots[[2]] + task.plots[[3]] + task.plots[[4]] + task.plots[[5]] + task.plots[[6]] + task.plots[[7]] + plot_layout(ncol = 7)
 }
 library(patchwork)
 p <- plots[[1]] / plots[[2]] / plots[[3]] / plots[[4]] / plots[[5]] / plots[[6]] / plots[[7]] / plots[[8]] 
-ggsave(p, filename = paste0("figs/02.04.MAVE.subsets.pdf"), width = 15, height = 28)
+ggsave(p, filename = paste0("figs/02.04.MAVE.subsets.pdf"), width = 35, height = 28)
 
 # ggsave(paste0('figs/02.03.MAVE.subset.PreMode.compare.pdf'), p, height = 6, width = 12)
 # show weighted average
 # plot the task weighted averages as well as task size weighted error bars
 uniq.result.plot <- result[result$seed==0,]
-for (i in 1:dim(uniq.result.plot)) {
+for (i in 1:dim(uniq.result.plot)[1]) {
   rhos <- result$min.val.R[result$model==uniq.result.plot$model[i] & 
                              result$task.name==uniq.result.plot$task.name[i] &
                              result$subset==uniq.result.plot$subset[i]]
@@ -247,11 +283,11 @@ for (i in 1:length(task.dic)) {
       ggtitle(paste0(task, ":", model)) + ggeasy::easy_center_title() + xlab("training data size (%)")
     task.plots[[k]] <- p
   }
-  plots[[i]] <- task.plots[[1]] + task.plots[[2]] + task.plots[[3]]
+  plots[[i]] <- task.plots[[1]] + task.plots[[2]] + task.plots[[3]] + task.plots[[4]] + task.plots[[5]] + task.plots[[6]] + task.plots[[7]] + plot_layout(ncol = 7)
 }
 library(patchwork)
 p <- plots[[1]] / plots[[2]] / plots[[3]] / plots[[4]] / plots[[5]] / plots[[6]] / plots[[7]] / plots[[8]] 
-ggsave(p, filename = paste0("figs/02.04.MAVE.subsets.mean.sd.pdf"), width = 15, height = 28)
+ggsave(p, filename = paste0("figs/02.04.MAVE.subsets.mean.sd.pdf"), width = 35, height = 28)
 
 # aggregate across models
 uniq.model.result.plot <- uniq.result.plot[!duplicated(uniq.result.plot[,c('model', "subset")]),]
@@ -284,8 +320,8 @@ for (i in 1:dim(uniq.model.result.plot)[1]) {
   # uniq.model.result.plot$rho[i] <- mean(rhos, na.rm = T)
   # uniq.model.result.plot$rho.sd[i] <- mean(rho.sds, na.rm = T)
 }
-uniq.model.result.plot$model[uniq.model.result.plot$model == "PreMode"] <- "PreMode (148k)"
-uniq.model.result.plot$model[uniq.model.result.plot$model == "ESM + SLR"] <- "ESM emb + SLP"
+# uniq.model.result.plot$model[uniq.model.result.plot$model == "PreMode"] <- "PreMode (148k)"
+uniq.model.result.plot$model[uniq.model.result.plot$model == "ESM + SLR"] <- "ESM2 emb + SLP"
 p <- ggplot(uniq.model.result.plot, aes(x=subset, y=rho, col=model)) +
   geom_point() +
   geom_errorbar(aes(ymin=rho-rho.sd, ymax=rho+rho.sd), width=.2) +
