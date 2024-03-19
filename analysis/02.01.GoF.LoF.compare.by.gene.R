@@ -1,38 +1,5 @@
-# ICC <- read.csv('~/Data/DMS/Itan.CKB.Cancer/ALL.csv', row.names = 1)
-# # remove unwanted variants
-# to.del <- readRDS("~/Data/DMS/Itan.CKB.Cancer/to.del.conflict.with.chps.RDS")
-# ICC$unique.id <- paste(ICC$uniprotID, ICC$ref, ICC$pos.orig, ICC$alt, sep = ":")
-# ICC <- ICC[!ICC$unique.id %in% to.del,]
-# ion.channel <- read.csv('~/Data/DMS/Ion_Channel/all.af2update.csv', row.names = 1)
-# ion.channel$unique.id <- paste(ion.channel$uniprotID, ion.channel$ref, ion.channel$pos.orig, ion.channel$alt, sep = ":")
-# ICC <- ICC[!ICC$unique.id %in% ion.channel$unique.id,]
-# ALL <- dplyr::bind_rows(ICC, ion.channel)
-
-# add benign
-source('/share/vault/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
-# Ion_channel <- read.csv('~/Data/DMS/')
-# check the sse and rsa
 ALL <- read.csv('figs/ALL.csv', row.names = 1, na.strings = c('.', 'NA'))
-# ALL <- uniprot.table.add.annotation.parallel(ALL, 'dssp')
-# ALL <- uniprot.table.add.annotation.parallel(ALL, 'FoldXddG')
-# ALL <- uniprot.table.add.annotation.parallel(ALL, 'pLDDT')
-# ALL <- uniprot.table.add.annotation.parallel(ALL, 'conservation')
-# compare conservation with benign
 benign <- read.csv('figs/benign.csv', row.names = 1, na.strings = c('.', 'NA'))
-# benign <- rbind(read.csv('~/Data/DMS/ClinVar.HGMD.PrimateAI.syn/training.csv'),
-#                 read.csv('~/Data/DMS/ClinVar.HGMD.PrimateAI.syn/testing.csv'))
-# benign <- benign[benign$score==0,]
-# benign$LABEL <- 'Benign'
-# benign <- uniprot.table.add.annotation.parallel(benign, 'conservation')
-# benign <- uniprot.table.add.annotation.parallel(benign, 'dssp')
-# benign <- uniprot.table.add.annotation.parallel(benign, 'pLDDT')
-# benign <- uniprot.table.add.annotation.parallel(benign, 'FoldXddG', njobs = 108)
-# ALL <- uniprot.table.add.annotation.parallel(ALL, "pfam")
-# ALL$LABEL[ALL$score==1] <- "GOF"
-# ALL$LABEL[ALL$score==0] <- "LOF"
-# write.csv(ALL, 'figs/ALL.csv')
-# write.csv(benign, 'figs/benign.csv')
-
 # Check P15056
 genes <- c("Q09428", "P15056", "O00555", "P21802",
            "Q14654", "P07949", "Q99250", "Q14524", "P04637")
@@ -82,10 +49,6 @@ for (gene.to.check in genes) {
   p <- protein.visualize(gene.to.check, gene.names[genes==gene.to.check], ALL, 'FoldXddG',
                          fill.colors = c('yellow', 'purple', 'black'))  
   ggsave(plot = p, filename = paste0("figs/02.01.GoF.LoF.compare.by.gene/", gene.to.check, ".visualize.pdf"), height=5, width=25)
-  
-  # we need a script to check the per residue energy change
-  source('/share/vault/Users/gz2294/Pipeline/uniprot.table.add.annotation.R')
-  
 }
 # check PTMs
 ptm.dict <- c('ac', 'ga', 'gl', 'm1', 'm2', 'm3', 'me', 'p', 'sm', 'ub')
