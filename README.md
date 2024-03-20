@@ -11,12 +11,13 @@ Unfortunately we are not allowed to share the HGMD data, so in the `data.files/p
 We shared the trained weights of our models trained using HGMD instead. 
 
 # Run
-`python train.py --conf CONFIG.yaml`
-All config files were stored in `scripts/` folder.
+Please install the necessary packages using `mamba env create -f PreMode.yaml`
+
+Then, inside the PreMode conda environment, run `python train.py --conf CONFIG.yaml`, where `CONFIG.yaml` is a config file stored in `scripts/` folder.
 
 Here is the list of models in our manuscript:
 
-`scripts/PreMode/` PreMode (Note previously we used torch_lightning to control the random seeds, now we used numpy.seed and torch.seed, there might be a slight difference), it takes 250 GB RAM and 4 A40 Nvidia GPUs to run, will finish in ~50h.
+`scripts/PreMode/` PreMode, it takes 250 GB RAM and 4 A40 Nvidia GPUs to run, will finish in ~50h.
 
 `scripts/ESM.LR/` Baseline Model, ESM2 (650M) + Single Layer Perceptron
 
@@ -33,6 +34,12 @@ Here is the list of models in our manuscript:
 `scripts/PreMode.ptm/` PreMode, add the onehot encoding of post transcriptional modification sites as input.
 
 `scripts/PreMode.mean.var/` PreMode, it will output both predicted value (mean) and confidence (var), used in adaptive learning tasks.
+
+# figures in our manuscript
+
+Please install the necessary R packages using `mamba env create -f r4-base.yaml`
+
+Please go to `analysis/` folder and run the corresponding R scripts.
 
 # New Experiment
 1. Please prepare a folder under `scripts/` and create a file named `pretrain.seed.0.yaml` inside the folder:
