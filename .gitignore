@@ -1,4 +1,7 @@
 archive/
 analysis/
 .vscode/
-data.files/
+data.files/af2.files.tgz*
+data.files/esm.files.tgz*
+data.files/esm.MSA.tgz*
+data.files/gMVP.MSA.tgz*
