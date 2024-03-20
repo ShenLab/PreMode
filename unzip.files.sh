@@ -6,6 +6,8 @@ cat gMVP.MSA.tgz.part-* | tar -xzvf -
 for tgzfile in `ls *.tgz`; do echo "Unzipping $tgzfile"; tar -xzvf $tgzfile; done
 for gzfile in `ls pretrain/*.gz`; do echo "Unzipping $gzfile"; gunzip $gzfile; done
 cd ../
+# unzip files in the analysis/5genes.all.mut/inference.results/ folder
+for gzfiles in `ls analysis/5genes.all.mut/inference.results/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
 # unzip files in the PreMode.results/ folder
 cd PreMode.results/
 cat PreMode.mean.var.seed.0.tgz.part-* | tar -xzvf -
