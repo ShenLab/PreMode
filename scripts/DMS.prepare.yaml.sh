@@ -232,7 +232,7 @@ do
 done
 
 # run ICC genes with five fold cross validation in subsets
-for gene in $(cat scripts/gene.txt | grep -v 'uniprot' | grep -v 'PF' | grep -v 'Ion')
+for gene in Q09428 P15056 O00555 Q14654 P07949 P04637
 do
   for subset in {1..5}
   do

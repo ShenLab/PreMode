@@ -1,5 +1,5 @@
 # PreMode
-This is the repository for our manuscript "PreMode predicts mode-of-action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv.
+This is the repository for our manuscript "PreMode predicts mode-of-action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv: https://www.biorxiv.org/content/10.1101/2024.02.20.581321v2
 
 # Data
 Please use the git lfs to download all files in `data.files/` folder
