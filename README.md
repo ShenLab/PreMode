@@ -6,6 +6,10 @@ Please use the git lfs to download all files in `data.files/` folder
 
 Unzip the files with this script: `cd data.files/; bash unzip.files.sh; cd ../`
 
+Unfortunately we are not allowed to share the HGMD data, so in the `data.files/pretrain/training.*` files we removed all the pathogenic variants from HGMD (49218 in total). This might affect the plots of `analysis/figs/fig.sup.14.pdf` and `analysis/figs/fig.sup.15.pdf` if you re-run the R codes in `analysis/` folder.
+
+We shared the trained weights of our models trained using HGMD instead. 
+
 # Run
 `python train.py --conf CONFIG.yaml`
 All config files were stored in `scripts/` folder.
