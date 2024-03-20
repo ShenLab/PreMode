@@ -1,4 +1,4 @@
-name: RESCVE
+name: PreMode
 channels:
   - schrodinger
   - anaconda
@@ -494,4 +494,4 @@ dependencies:
       - lit==17.0.4
       - loralib==0.1.2
       - triton==2.1.0
-prefix: /share/descartes/Users/gz2294/miniconda3/envs/RESCVE
+prefix: /share/descartes/Users/gz2294/miniconda3/envs/PreMode

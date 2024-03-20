@@ -1,0 +1,2 @@
+PreMode.results/PreMode.mean.var.seed.0.tgz.part-ab filter=lfs diff=lfs merge=lfs -text
+PreMode.results/PreMode.mean.var.seed.0.tgz.part-aa filter=lfs diff=lfs merge=lfs -text
