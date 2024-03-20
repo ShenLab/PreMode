@@ -8,6 +8,10 @@ for gzfile in `ls pretrain/*.gz`; do echo "Unzipping $gzfile"; gunzip $gzfile; d
 cd ../
 # unzip files in the analysis/5genes.all.mut/inference.results/ folder
 for gzfiles in `ls analysis/5genes.all.mut/inference.results/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
+# unzip files in the analysis/5genes.all.mut/ folder
+for gzfiles in `ls analysis/5genes.all.mut/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
+# unzip files in the analysis/ folder
+for gzfiles in `ls analysis/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
 # unzip files in the PreMode.results/ folder
 cd PreMode.results/
 cat PreMode.mean.var.seed.0.tgz.part-* | tar -xzvf -
