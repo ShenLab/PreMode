@@ -35,7 +35,7 @@ Here is the list of models in our manuscript:
 
 `scripts/PreMode.mean.var/` PreMode, it will output both predicted value (mean) and confidence (var), used in adaptive learning tasks.
 
-# figures in our manuscript
+# Figures in our manuscript
 
 Please install the necessary R packages using `mamba env create -f r4-base.yaml`
 
