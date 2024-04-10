@@ -10,17 +10,6 @@ from esm.multihead_attention import MultiheadAttention
 import math
 from torch import _dynamo
 _dynamo.config.suppress_errors = True
-# from openfold.model.triangular_multiplicative_update import (
-#     TriangleMultiplicationIncoming,
-#     TriangleMultiplicationOutgoing,
-# )
-# from esm.esmfold.v1.misc import (
-#     Attention,
-#     Dropout,
-#     PairToSequence,
-#     ResidueMLP,
-#     SequenceToPair,
-# )
 from ..module.utils import (
     CosineCutoff,
     act_class_mapping,
@@ -3670,7 +3659,17 @@ class TriangularSelfAttentionBlock(nn.Module):
         **__kwargs,
     ):
         super().__init__()
-
+        from openfold.model.triangular_multiplicative_update import (
+            TriangleMultiplicationIncoming,
+            TriangleMultiplicationOutgoing,
+        )
+        from esm.esmfold.v1.misc import (
+            Attention,
+            Dropout,
+            PairToSequence,
+            ResidueMLP,
+            SequenceToPair,
+        )
         assert sequence_state_dim % sequence_head_width == 0
         assert pairwise_state_dim % pairwise_head_width == 0
         sequence_num_heads = sequence_state_dim // sequence_head_width
@@ -3783,6 +3782,11 @@ class TriangularSelfAttentionBlock(nn.Module):
 class SeqPairAttentionOutput(nn.Module):
     def __init__(self, seq_state_dim, pairwise_state_dim, num_heads, output_dim, dropout):
         super(SeqPairAttentionOutput, self).__init__()
+        from esm.esmfold.v1.misc import (
+            Attention,
+            PairToSequence,
+            ResidueMLP,
+        )
         self.seq_state_dim = seq_state_dim
         self.pairwise_state_dim = pairwise_state_dim
         self.output_dim = output_dim

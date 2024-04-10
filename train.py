@@ -13,7 +13,7 @@ from types import SimpleNamespace as sn
 import data
 from model import model
 from model.model import create_model, create_model_and_load
-from model.trainer import data_distributed_parallel_gpu, PreMode_trainer, single_thread_gpu, ray_tune
+from model.trainer import data_distributed_parallel_gpu, PreMode_trainer, single_thread_gpu, ray_tune, single_thread_gpu_4_fold
 from model.trainer_noGraph import PreMode_trainer_noGraph
 from model.trainer_ssp import PreMode_trainer_SSP
 from utils.configs import save_argparse, LoadFromFile
@@ -96,12 +96,20 @@ def get_args():
                         help='Whether to augument data, if so, the data will be augumented in the training process by reverse the ref and alt')
     parser.add_argument('--score-transfer', type=bool, default=False,
                         help='Whether to transfer scer, if so, the score will be transfered to 0, 3')
+    parser.add_argument('--use-lmdb', type=bool, default=False,
+                        help='Whether to use preloaded lmdb')
+    parser.add_argument('--add-nma', type=bool, default=False,
+                        help='Whether to use Normal Mode Analysis')
+    parser.add_argument('--loaded-nma', type=bool, default=False,
+                        help='Whether to load Normal Mode Analysis')
     
     # model specific
     parser.add_argument('--load-model', type=str, default=None,
                         help='Restart training using a model checkpoint')
     parser.add_argument('--partial-load-model', type=bool, default=False,
                         help='Partial load model, particullay from maskpredict model using a model checkpoint')
+    parser.add_argument('--use-output-head', type=bool, default=False,
+                        help='Use output head or not')
     parser.add_argument('--model-class', type=str, default=None, choices=model.__all__,
                         help='Which model to use')
     parser.add_argument('--model', type=str, default=None,
@@ -182,6 +190,8 @@ def get_args():
                         help='freeze representation module but without gru, or not')
     parser.add_argument('--seed', type=int, default=0, 
                         help='random seed')
+    parser.add_argument('--seed-with-pl', type=bool, default=False, 
+                        help='Initialize with pytorch lightning seed')
     parser.add_argument('--lr', type=float, default=1e-5, 
                         help='learning rate')
     parser.add_argument('--lr-factor', type=float, default=0.8, 
@@ -226,6 +236,8 @@ def get_args():
                         help='Whether use hyperparameter tuning or not')
     parser.add_argument('--adaptive-rounds', type=int, default=6, 
                         help='active learning rounds')
+    parser.add_argument('--init-fn', type=str, default=None, 
+                        help='Initialization function for output model')
     
     # log specific
     parser.add_argument('--num-save-epochs', type=int, default=1, 
@@ -267,11 +279,15 @@ def get_args():
     return args
 
 
-def main(args, continue_train=False):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+def main(args, continue_train=False, four_fold=False):
+    if args.seed_with_pl:
+        import pytorch_lightning as pl
+        pl.seed_everything(args.seed)
+    else:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
 
     hparams = vars(args)
     model_class = args.model_class
@@ -312,7 +328,10 @@ def main(args, continue_train=False):
                    "alt_type": args.alt_type,
                    "computed_graph": args.computed_graph,
                    "neighbor_type": args.neighbor_type,
-                   "max_len": args.max_len,}
+                   "max_len": args.max_len,
+                   "use_lmdb": args.use_lmdb,
+                   "add_nma": args.add_nma,
+                   "loaded_nma": args.loaded_nma}
     if "Onesite" in args.dataset:
         dataset_att['convert_to_onesite'] = args.convert_to_onesite
     if args.trainer_fn == "PreMode_trainer_noGraph":
@@ -343,6 +362,7 @@ def main(args, continue_train=False):
     else:
         check_point_epoch = None
     if args.ngpus > 1:
+        assert four_fold is False, "fold 4 is not supported in distributed training"
         mp.spawn(data_distributed_parallel_gpu,
                     args=(my_model, args, dataset_att, dataset_extra_args, trainer_fn, check_point_epoch),
                     nprocs=args.ngpus,
@@ -353,14 +373,21 @@ def main(args, continue_train=False):
             **dataset_att,
             **dataset_extra_args,
         )
-        single_thread_gpu(args.gpu_id, my_model, args, dataset, trainer_fn, check_point_epoch)
+        if four_fold:
+            single_thread_gpu_4_fold(args.gpu_id, my_model, args, dataset, trainer_fn, check_point_epoch)
+        else:
+            single_thread_gpu(args.gpu_id, my_model, args, dataset, trainer_fn, check_point_epoch)
 
 
 def adaptive_main(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if args.seed_with_pl:        
+        import pytorch_lightning as pl
+        pl.seed_everything(args.seed)
+    else:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
 
     hparams = vars(args)
     model_class = args.model_class
@@ -623,10 +650,14 @@ def hp_tune(args):
 
 def _test(args):
     import numpy as np
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if args.seed_with_pl:
+        import pytorch_lightning as pl
+        pl.seed_everything(args.seed)
+    else:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
 
     hparams = vars(args)
     model_class = args.model_class
@@ -725,6 +756,8 @@ def _test(args):
             else:
                 print(f"model for step {step} not exists")
                 continue
+    # clean up the data sets
+    trainer.dataset.clean_up()
 
 
 def _test_one_epoch(trainer):
@@ -767,7 +800,7 @@ def ig_forward(x, trainer, batch, out_idx=0):
     return out[:, [out_idx, out_idx]]
 
 
-def interpret(args, idxs=None, epoch=None, step=None):
+def interpret(args, idxs=None, epoch=None, step=None, dryrun=False, four_fold=False):
     # interpret a dataset by attention, only for the data point of idxs in the dataset
     dataset_att = {"data_type": args.data_type,
                    "radius": args.radius,
@@ -786,6 +819,10 @@ def interpret(args, idxs=None, epoch=None, step=None):
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
+                   "add_af2_single": args.add_af2_single,
+                   "add_af2_pairwise": args.add_af2_pairwise,
+                   "loaded_af2_single": args.loaded_af2_single,
+                   "loaded_af2_pairwise": args.loaded_af2_pairwise,
                    "loaded_msa": args.loaded_msa,
                    "loaded_esm": args.loaded_esm,
                    "loaded_confidence": args.loaded_confidence,
@@ -803,12 +840,35 @@ def interpret(args, idxs=None, epoch=None, step=None):
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
-    dataset = getattr(data, args.dataset)(
-        data_file=args.data_file_test,
-        **dataset_att,
-        **dataset_extra_args,
-    )
-    x_embed_df = interpret_core(args, dataset, idxs=idxs, epoch=epoch, step=step)
+    if dryrun:
+        dataset = None
+    else:
+        dataset = getattr(data, args.dataset)(
+            data_file=args.data_file_test,
+            **dataset_att,
+            **dataset_extra_args,
+        )
+    # apply 4 fold cross validation
+    if four_fold:
+        main_log_dir = args.log_dir
+        if idxs is None:
+            idxs = list(range(len(dataset)))
+            out_index = dataset.data.index
+        else:
+            out_index = dataset.data.index[idxs]
+        x_embed_df = dataset.data.loc[out_index]
+        for FOLD in range(4):
+            # change args log_dir to the fold log_dir
+            args.log_dir = os.path.join(main_log_dir, f"FOLD.{FOLD}/")
+            _, ys, min_loss = interpret_core(args, dataset, idxs=idxs, epoch=epoch, step=step, dryrun=dryrun, four_fold=True)
+            # change ys columns to original column name + '.FOLD.{FOLD}'
+            ys.columns = [f"{c}.FOLD.{FOLD}" for c in ys.columns]
+            x_embed_df = pd.concat([x_embed_df, ys], axis=1)
+            x_embed_df[f"min_loss.FOLD.{FOLD}"] = min_loss
+    else:
+        x_embed_df = interpret_core(args, dataset, idxs=idxs, epoch=epoch, step=step, dryrun=dryrun)
+        if dryrun:
+            return
     if args.out_dir is None:
         args.out_dir = args.log_dir
     if not os.path.exists(args.out_dir) and not args.out_dir.endswith(".csv"):
@@ -819,11 +879,15 @@ def interpret(args, idxs=None, epoch=None, step=None):
         x_embed_df.to_csv(f"{args.out_dir}/x_embeds.csv", index=False)
 
 
-def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+def interpret_core(args, dataset, idxs=None, epoch=None, step=None, dryrun=False, four_fold=False):
+    if args.seed_with_pl:
+        import pytorch_lightning as pl
+        pl.seed_everything(args.seed)
+    else:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
     hparams = vars(args)
     model_class = args.model_class
     # initialize model
@@ -844,14 +908,19 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
     if args.hp_tune:
         my_model.load_state_dict(torch.load(f'{args.log_dir}/model.hp_tune.pt', map_location=torch.device("cpu")))
     my_model.eval()
-    trainer = trainer_fn(hparams=args, model=my_model, 
-                         stage="test", dataset=dataset, device_id=args.gpu_id)
+    if dryrun:
+        trainer = None
+    else:
+        trainer = trainer_fn(hparams=args, model=my_model, 
+                            stage="test", dataset=dataset, device_id=args.gpu_id)
     if not args.hp_tune:
         # only load model if not hp_tune
         if epoch is not None:
             trainer.load_model(epoch=epoch)
+            min_loss = None
         elif step is not None:
             trainer.load_model(step=step)
+            min_loss = None
         else:
             if args.interpret_by is None:
                 train_data_size = subprocess.check_output(f'wc -l {args.data_file_train}', shell=True)
@@ -875,6 +944,7 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
                     val_losses.append(np.mean(val_loss))
                 min_val_loss_epoch = np.argmin(val_losses) + 1
                 trainer.load_model(epoch=min_val_loss_epoch)
+                min_loss = np.min(np.array(val_losses)[~np.isnan(val_losses)])
             elif args.interpret_by == "batch":
                 # find the min val loss batch
                 val_losses = []
@@ -898,6 +968,7 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
                 min_val_loss_batch = steps[np.argmin(np.array(val_losses)[~np.isnan(val_losses)])]
                 print(f"min_val_loss_batch: {min_val_loss_batch}")
                 trainer.load_model(step=min_val_loss_batch)
+                min_loss = np.min(np.array(val_losses)[~np.isnan(val_losses)])
             elif args.interpret_by == "both":
                 # find the min val loss epoch
                 val_losses = []
@@ -922,8 +993,8 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
                                                 * args.num_epochs / args.num_save_batches) + 1)
                 print(f'num_saved_batches: {num_saved_batches}')
                 steps = list(range(args.num_save_batches,
-                                num_saved_batches * args.num_save_batches,
-                                args.num_save_batches))
+                                   num_saved_batches * args.num_save_batches,
+                                   args.num_save_batches))
                 for step in steps:
                     val_loss = []
                     for rank in range(args.ngpus):
@@ -935,13 +1006,26 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
                             val_loss.append(np.nan)
                     val_losses.append(np.mean(val_loss))
                 if len(np.array(val_losses)[~np.isnan(val_losses)]) > 0:
-                    min_val_loss_batch = steps[np.argmin(np.array(val_losses)[~np.isnan(val_losses)])]
+                    # remove nan values steps
+                    steps = np.array(steps)[~np.isnan(val_losses)]
+                    # remove nan values val_losses
+                    val_losses = np.array(val_losses)[~np.isnan(val_losses)]
+                    min_val_loss_batch = steps[np.argmin(val_losses)]
                     min_batch_loss = np.min(val_losses)
+                    min_loss = min(min_epoch_loss, min_batch_loss)
+                else:
+                    min_loss = min_epoch_loss
                 if len(np.array(val_losses)[~np.isnan(val_losses)]) == 0 or min_epoch_loss < min_batch_loss:
-                    print(f"min_val_loss_epoch: {min_val_loss_epoch}")
+                    print(f"min_val_loss_epoch: {min_val_loss_epoch}, loss: {min_epoch_loss}")
+                    if dryrun:
+                        print("dryrun mode, skip interpret")
+                        return
                     trainer.load_model(epoch=min_val_loss_epoch)
                 else:
-                    print(f"min_val_loss_batch: {min_val_loss_batch}")
+                    print(f"min_val_loss_batch: {min_val_loss_batch}, loss: {min_batch_loss}")
+                    if dryrun:
+                        print("dryrun mode, skip interpret")
+                        return
                     trainer.load_model(step=min_val_loss_batch)
     if idxs is None:
         idxs = list(range(len(dataset)))
@@ -965,7 +1049,7 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
             res = trainer.loss_fn(y, tgt, reduce=False, reduction="none")
             return res
     for idx in idxs:
-        batch = dataset.get(idx)
+        batch = dataset.__getitem__(idx)
         if args.dataset.startswith("FullGraph"):
             # we need to expand the batch dim 1
             for k in batch:
@@ -1012,8 +1096,12 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
         if "Onesite" in args.dataset:
             # reshape y to (batch_size, -1)
             y = y.reshape(y.shape[0], -1)
-        if args.dataset.startswith("FullGraph") and not args.model.startswith("lora"):
-            x_embed = x_embed[0]
+        while len(x_embed.shape) > 2:
+            x_embed = x_embed.squeeze(0)
+        while (len(y.shape) > 2):
+            y = y.squeeze(-1)
+        # if args.dataset.startswith("FullGraph") and not args.model.startswith("lora"):
+        #     x_embed = x_embed[0]
         x_embeds.append(x_embed.detach().cpu().numpy())
         ys.append(y.detach().cpu().numpy())
         # print(f"loss for data point idx {idx}: {loss}")
@@ -1054,13 +1142,19 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None):
         ys.columns = ["logits"]
     else:
         ys.columns=[f'logits.{i}' for i in range(ys.shape[1])]
-    x_embed_df = pd.concat([dataset.data.loc[out_index], ys, x_embeds],
-                           axis=1)
+    x_embed_df = pd.concat([dataset.data.loc[out_index], ys, x_embeds], axis=1)
     if args.loss_fn == "GP_loss" or args.loss_fn == "weighted_loss_betabinomial" or args.loss_fn == "gaussian_loss":
         x_embed_df = pd.concat([x_embed_df, y_covars], axis=1)
     if args.use_jacob:
         x_embed_df = pd.concat([x_embed_df, x_jacobs_df], axis=1)
-    return x_embed_df
+    # clean up the data sets
+    trainer.dataset.clean_up()
+    # add min_loss to the x_embed_df
+    x_embed_df["min_loss"] = min_loss
+    if four_fold:
+        return x_embed_df, ys, min_loss
+    else:
+        return x_embed_df
 
 
 def interpret_datapoint(idx):
@@ -1250,7 +1344,9 @@ if __name__ == "__main__":
     _args = get_args()
     if _args.mode == "train":
         main(_args)
-    if _args.mode == "adaptive_train":
+    elif _args.mode == "train_4_fold":
+        main(_args, continue_train=False, four_fold=True)
+    elif _args.mode == "adaptive_train":
         adaptive_main(_args)
     elif _args.mode == "continue_train":
         main(_args, continue_train=True)
@@ -1264,6 +1360,14 @@ if __name__ == "__main__":
         if _args.interpret_idxes is not None:
             _args.interpret_idxes = [int(i) for i in _args.interpret_idxes.split(",")]
         interpret(_args, idxs=_args.interpret_idxes, step=_args.interpret_step, epoch=_args.interpret_epoch)
+    elif _args.mode == "interpret_dry":
+        if _args.interpret_idxes is not None:
+            _args.interpret_idxes = [int(i) for i in _args.interpret_idxes.split(",")]
+        interpret(_args, idxs=_args.interpret_idxes, step=_args.interpret_step, epoch=_args.interpret_epoch, dryrun=True)
+    elif _args.mode == "interpret_4_fold":
+        if _args.interpret_idxes is not None:
+            _args.interpret_idxes = [int(i) for i in _args.interpret_idxes.split(",")]
+        interpret(_args, idxs=_args.interpret_idxes, step=_args.interpret_step, epoch=_args.interpret_epoch, dryrun=False, four_fold=True)
     elif _args.mode == "test_equivariancy":
         test_scalar_invariance(_args)
     elif _args.mode == "test_equivariancy_2":

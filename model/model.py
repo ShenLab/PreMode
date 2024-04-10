@@ -131,6 +131,12 @@ def create_model(args, model_class="PreMode"):
             lm_head=esm_model.lm_head,
         )
     else:
+        # for non-clinvar tasks, use non_uniform init
+        if args["init_fn"] is None:
+            if args["data_type"] != "ClinVar":
+                args["init_fn"] = "non_uniform"
+            else:
+                args["init_fn"] = "uniform"
         if hasattr(output, args["output_model"]):
             output_model = getattr(output, args["output_model"])(
                 args=args,

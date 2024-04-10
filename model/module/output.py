@@ -179,6 +179,7 @@ class EquivariantScalar(OutputModel):
             args,
             activation="sigmoid",
             allow_prior_model=True,
+            init_fn='uniform',
     ):
         x_channels = args["x_channels"]
         if args["model"] == "pass-forward":
@@ -195,11 +196,15 @@ class EquivariantScalar(OutputModel):
             nn.Linear(x_channels, out_channels),
             act_class(),
         )
+        self.init_fn = init_fn
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.output_network[0].weight)
+        if self.init_fn == 'uniform':
+            nn.init.xavier_uniform_(self.output_network[0].weight)
+        else:
+            nn.init.constant_(self.output_network[0].weight, 0)
         self.output_network[0].bias.data.fill_(0)
 
     def pre_reduce(self, x, v: Optional[torch.Tensor], pos, batch):
@@ -329,12 +334,14 @@ class EquivariantStarPoolScalar(EquivariantScalar):
             args,
             activation="sigmoid",
             allow_prior_model=True,
+            init_fn='uniform',
     ):
         x_channels = args["x_channels"]
         super(EquivariantStarPoolScalar, self).__init__(
             args=args,
             activation=activation,
             allow_prior_model=allow_prior_model,
+            init_fn=init_fn,
         )
         # apply two layers of StarPool
         if args["loss_fn"] == "weighted_combined_loss" or args["loss_fn"] == "combined_loss":
@@ -792,7 +799,7 @@ def build_output_model(output_model_name, args, **kwargs):
     elif output_model_name == "ESMFullGraphBinaryClassificationScalar":
         return ESMFullGraphScalar(args=args, activation="sigmoid", **kwargs)
     elif output_model_name == "EquivariantBinaryClassificationStarPoolScalar":
-        return EquivariantStarPoolScalar(args=args, activation="sigmoid")
+        return EquivariantStarPoolScalar(args=args, activation="sigmoid", init_fn=args["init_fn"])
     elif output_model_name == "EquivariantBinaryClassificationStarPoolMeanVarScalar":
         return EquivariantStarPoolMeanVarScalar(args=args, activation="softplus")
     elif output_model_name == "EquivariantBinaryClassificationAttnScalar":

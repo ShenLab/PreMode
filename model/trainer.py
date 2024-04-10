@@ -1,4 +1,5 @@
 import json
+import pickle
 import os
 from types import SimpleNamespace as sn
 import time
@@ -487,6 +488,8 @@ class PreMode_trainer(object):
         if hasattr(self.dataset, 'env') and self.dataset.env is not None:
             self.dataset.env.close()
             self.dataset.env = None
+        if hasattr(self.dataset, 'txn') and self.dataset.txn is not None:
+            self.dataset.txn = None
         self.train_iterator = iter(self.train_dataloader)
         # set model to train mode
         self.model.train()
@@ -795,7 +798,7 @@ class PreMode_trainer(object):
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '15443'
+    os.environ['MASTER_PORT'] = '15423'
     # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
@@ -1179,6 +1182,154 @@ def single_thread_gpu(rank, model, hparams, dataset, trainer_fn=None, checkpoint
     # return all_losses
     # clean up the dataset
     trainer.dataset.clean_up()
+    return trainer
+
+
+def single_thread_gpu_4_fold(rank, model, hparams, dataset, trainer_fn=None, checkpoint_epoch=None):
+    # set up training processes
+    # do 4 fold cross validation, the method is, add a 'split' column to dataset, and then split the dataset into 4 parts
+    # for each part, we train on the other 3 parts and validate on this part
+    # each part has its own trainer and log dir
+    if isinstance(hparams, dict):
+        # If using hp_tune, then hparams is a dict
+        hparams = sn(**hparams)
+    # if trial_id is not None, means we are in the hp_tune mode, we need to create subdirectory for this trial
+    # 4 fold cross validation is not supported in hp_tune mode
+    # first generate the split column, use seed 0 as default
+    np.random.seed(0)
+    # we have to make split take both label into account
+    gof_indices = dataset.data.index[dataset.data["score"] == 1]
+    lof_indices = dataset.data.index[dataset.data["score"] == -1]
+    # random split the gof_indices and lof_indices into 4 parts
+    # have to give exact number of indices to each part, as sometimes it is not evenly divided
+    gof_fold_split_sz = max(len(gof_indices) // 4, 1)
+    lof_fold_split_sz = max(len(lof_indices) // 4, 1)
+    gof_fold_split = np.split(np.random.permutation(gof_indices), [gof_fold_split_sz, 2*gof_fold_split_sz, 3*gof_fold_split_sz])
+    lof_fold_split = np.split(np.random.permutation(lof_indices), [lof_fold_split_sz, 2*lof_fold_split_sz, 3*lof_fold_split_sz])
+    # save the fold_split to the log_dir
+    with open(f"{hparams.log_dir}/fold_split.pkl", "wb") as f:
+        pickle.dump([gof_fold_split, lof_fold_split], f)
+    main_log_dir = hparams.log_dir
+    for FOLD in range(4):
+        print(f"Begin Fold id: {FOLD}")
+        hparams.log_dir = f"{main_log_dir}/FOLD.{FOLD}/"
+        hparams.data_split_fn = "_by_anno"
+        os.makedirs(hparams.log_dir, exist_ok=True)
+        # modify the dataset to have the split column
+        dataset_fold = copy.deepcopy(dataset)
+        # for fold_split == FOLD, assign as 'val', for others, assign as 'train'
+        dataset_fold.data["split"] = 'train'
+        # choose the gof_fold_split and lof_fold_split
+        dataset_fold.data.loc[gof_fold_split[FOLD], "split"] = 'val'
+        dataset_fold.data.loc[lof_fold_split[FOLD], "split"] = 'val'
+        
+        epochs = hparams.num_epochs
+        save_every_step = hparams.num_save_batches
+        save_every_epoch = hparams.num_save_epochs
+        # if we found that the model existed for this fold, then skip this fold
+        if os.path.exists(f"{hparams.log_dir}/model.epoch.{epochs}.pt"):
+            print(f"Fold {FOLD} already trained, skip")
+            continue
+        device = f'cuda:{rank}'
+        torch.cuda.set_per_process_memory_fraction(1.0, rank)
+        # have to copy the model to avoid the model being modified by other folds
+        model_fold = copy.deepcopy(model)
+        model_fold = model_fold.to(device)
+        model_fold.train()
+    
+        trainer = trainer_fn(hparams=hparams, model=model_fold, dataset=dataset_fold, device_id=rank)
+        print(f"number of trainable parameters: {sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)}, " +
+            f"percentage = {sum(p.numel() for p in trainer.model.parameters() if p.requires_grad) / sum(p.numel() for p in trainer.model.parameters())}")
+        # begin training
+        for i in range(epochs):
+            epoch_start_time = time.time()
+            train_finished = False
+            trainer.training_epoch_begin()
+            while not train_finished:
+                try:
+                    batch_start_time = time.time()
+                    loss = trainer.training_step()
+                    if trainer.global_step % hparams.num_steps_update == 0:
+                            # only update every num_steps_update steps, to save memory
+                        trainer.optimizer_step(loss)
+                    batch_end_time = time.time()
+                    print(f"Rank {rank} batch {trainer.global_step} time: {batch_end_time - batch_start_time}")
+                    if trainer.global_step % save_every_step == 0:
+                        trainer.write_model(step=trainer.global_step)
+                        # validate every save_every_step steps
+                        val_finished = False
+                        val_start_time = time.time()
+                        trainer.validation_epoch_begin()
+                        while not val_finished:
+                            try:
+                                trainer.validation_step()
+                            except StopIteration:
+                                val_finished = True
+                        result_dict = trainer.validation_epoch_end()
+                        print(f"Rank {rank} batch {trainer.global_step} result: {result_dict}")
+                        with open(
+                                f"{hparams.log_dir}/result_dict.batch.{trainer.global_step}.ddp_rank.{rank}.json", "w"
+                        ) as f:
+                            json.dump(result_dict, f)
+                        all_val_loss = result_dict["val_loss"]
+                        print(f"Batch {trainer.global_step} all val loss: {all_val_loss}")
+                        trainer.scheduler_step(all_val_loss)
+                        # if in the haparameter tuning mode, then save the model to the checkpoint directory
+                        if hparams.hp_tune:
+                            checkpoint_data = {
+                                "epoch": trainer.current_epoch,
+                                "batch": trainer.global_step,
+                                "net_state_dict": trainer.model.state_dict(),
+                                "optimizer_state_dict": trainer.optimizer.state_dict(),
+                                "scheduler_state_dict": trainer.scheduler.state_dict(),
+                            }
+                            checkpoint = Checkpoint.from_dict(checkpoint_data)
+                            session.report(
+                                {"loss": all_val_loss},
+                                checkpoint=checkpoint,
+                            )
+                        val_end_time = time.time()
+                        print(f"Rank {rank} batch {trainer.global_step} validation time: {val_end_time - val_start_time}")
+                except StopIteration:
+                    train_finished = True
+            # if remain unupdated parameters, update them
+            if not trainer.updated:
+                trainer.optimizer_step(loss)
+            # validate every epoch
+            val_finished = False
+            trainer.validation_epoch_begin()
+            while not val_finished:
+                try:
+                    trainer.validation_step()
+                except StopIteration:
+                    val_finished = True
+            result_dict = trainer.validation_epoch_end()
+            print(f"Rank {rank} epoch {i} result: {result_dict}")
+            with open(f"{hparams.log_dir}/result_dict.epoch.{i}.ddp_rank.{rank}.json", "w") as f:
+                json.dump(result_dict, f)
+            trainer.training_epoch_end()
+            # if in the haparameter tuning mode, then save the model to the checkpoint directory
+            all_val_loss = result_dict["val_loss"]
+            if hparams.hp_tune:
+                checkpoint_data = {
+                    "epoch": trainer.current_epoch,
+                    "batch": trainer.global_step,
+                    "net_state_dict": trainer.model.state_dict(),
+                    "optimizer_state_dict": trainer.optimizer.state_dict(),
+                    "scheduler_state_dict": trainer.scheduler.state_dict(),
+                }
+                checkpoint = Checkpoint.from_dict(checkpoint_data)
+                session.report(
+                    {"loss": all_val_loss},
+                    checkpoint=checkpoint,
+                )
+            epoch_end_time = time.time()
+            print(f"Epoch {i} time: ", epoch_end_time - epoch_start_time)
+            if trainer.current_epoch % save_every_epoch == 0:
+                trainer.write_model(epoch=trainer.current_epoch, save_optimizer=True, optimizer_rank=rank)
+        # return all_losses
+        # clean up the dataset
+        trainer.dataset.clean_up()
     return trainer
 
 
