@@ -14,3 +14,4 @@ data.files/esm.MSA.tgz*
 data.files/gMVP.MSA.tgz*
 copy.files.sh
 remove.columns.R
+zip.files.sh
