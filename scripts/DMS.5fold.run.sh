@@ -26,7 +26,7 @@ for fold in {0..4}
             continue
           fi
         fi
-        python -W ignore::UserWarning:torch_geometric.data.collate:147 train.py --conf $1/$task.5fold/$task.fold.$fold.yaml --mode continue_train
+        python -W ignore::UserWarning:torch_geometric.data.collate:147 train.py --conf $1/$task.5fold/$task.fold.$fold.yaml --mode train_4_fold
       done
     else
       echo "Begin "$gene
@@ -39,7 +39,7 @@ for fold in {0..4}
           continue
         fi
       fi
-      python -W ignore::UserWarning:torch_geometric.data.collate:147 train.py --conf $1/$gene.5fold/$gene.fold.$fold.yaml --mode continue_train
+      python -W ignore::UserWarning:torch_geometric.data.collate:147 train.py --conf $1/$gene.5fold/$gene.fold.$fold.yaml --mode train_4_fold
     fi
   done
 done
