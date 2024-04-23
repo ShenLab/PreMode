@@ -14,44 +14,19 @@ alphabet_premode <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
 genes <- c("PTEN", "NUDT15", "CCR5", "CXCR4", 'SNCA', 'CYP2C9', 'GCK', 'ASPA')
 # add baseline AUC
 # esm alphabets
-source('~/Pipeline/AUROC.R')
-source('~/Pipeline/uniprot.table.add.annotation.R')
+source('./AUROC.R')
 alphabet <- c('<cls>', '<pad>', '<eos>', '<unk>',
               'L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
               'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C',
               'X', 'B', 'U', 'Z', 'O', '.', '-',
               '<null_1>', '<mask>')
-for (i in 1:length(genes)) {
-  # add ESM
-  assay <- read.csv(paste0('/share/vault/Users/gz2294/Data/DMS/MAVEDB/', genes[i], '/ALL.annotated.csv'))
-  assay$unique.id <- paste0(assay$ref, assay$pos.orig, assay$alt)
-  for (fold in 0:4) {
-    if (!file.exists(paste0('PreMode.inference/', genes[i], '/test.fold.',
-                            fold, '.annotated.csv'))) {
-      test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
-                                     '/testing.fold.', fold, '.csv'))
-      test.result$unique.id <- paste0(test.result$ref, test.result$pos.orig, test.result$alt)
-      
-      pretrain.logits <- read.csv(paste0('PreMode.inference/', genes[i], '/',
-                                         '/testing.pretrain.fold.', fold, '.csv'))
-      test.result$pretrain.logits <- pretrain.logits$logits
-      for (anno in c('ESM1b.LLR', 'AlphaMissense', 'EVE', 'REVEL', 'PrimateAI',
-                       'gMVP', 'FoldXddG', 'conservation.entropy', 'RosettaddG')) {
-        test.result[,anno] <- assay[match(test.result$unique.id, assay$unique.id), anno]
-      }
-      write.csv(test.result, paste0('PreMode.inference/', genes[i], '/',
-                                    '/test.fold.', fold, '.annotated.csv'))
-    }
-  }
-}
-
 result <- data.frame()
 for (i in 1:length(genes)) {
   for (fold in 0:4) {
     # REVEL, PrimateAI, ESM AUC
-    test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
+    test.result <- read.csv(paste0('PreMode/', genes[i], '/',
                                    '/test.fold.', fold, '.annotated.csv'), row.names = 1)
-    test.result.pass <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
+    test.result.pass <- read.csv(paste0('ESM.SLP/', genes[i], '/',
                                         '/testing.fold.', fold, '.csv'))
     task.length <- length(task.dic[[genes[i]]])
     # add hsu et al results
@@ -81,7 +56,7 @@ for (i in 1:length(genes)) {
                             fold=fold,
                             npoints=dim(test.result)[1])
     to.append$model <- rep(c("PreMode", 
-                             "ESM2 emb + SLP",  
+                             "ESM+SLP",  
                              "Augmented Unirep",
                              "Augmented EVmutation",
                              "Augmented ESM1b",
@@ -154,7 +129,7 @@ p <- ggplot(uniq.model.result.plot.plot, aes(x=stab.rho, y=func.rho, col=model))
   # coord_flip() +guides(col=guide_legend(ncol=2)) +
   labs(x = "stab.rho", y = "func.rho", fill = "model") +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", alpha=0.2) +
-  theme_bw() + xlim(0.15, 0.65) + ylim(0.15, 0.65) +
+  theme_bw() + xlim(0.15, 0.7) + ylim(0.15, 0.7) +
   theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
         legend.position="right", 
         legend.direction="vertical") + 

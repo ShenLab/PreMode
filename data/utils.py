@@ -25,8 +25,6 @@ from torch_cluster import radius_graph, knn_graph
 AF2_DATA_PATH = './data.files/af2.files/'
 # unused in this version
 AF2_REP_DATA_PATH = "NA"
-# AF2_SEQ_DICT = pd.read_csv('/share/pascal/Users/gz2294/Data/af2_uniprot/swissprot_and_human.csv',
-#                            index_col=0, low_memory=False).set_index('file_name').T.to_dict()
 # Path to the AF2 data
 ESM_MODEL_SIZE = '650M'
 ESM_DATA_PATH = f'./data.files/esm.files/'

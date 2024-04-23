@@ -153,6 +153,7 @@ class GraphMutationDataset(Dataset):
         if self.add_ptm:
             self.ptm_ref = pd.read_csv('./data.files/ptm.small.csv', index_col=0)
         self.get_method = 'default'
+        # if your machine has sufficient memory, you can uncomment the following line
         # self.load_all_to_memory()
 
     def _check_embedding_files(self):
@@ -162,7 +163,7 @@ class GraphMutationDataset(Dataset):
         print(f"found {len(unique_data)} unique wt sequences")
         # only check embeddings if we are using esm
         if self.node_embedding_type == 'esm':
-            with get_context('spawn').Pool(NUM_THREADS) as p:
+            with Pool(NUM_THREADS) as p:
                 embedding_exist = p.starmap(utils.get_embedding_from_esm2, zip(unique_data['uniprotID'], cycle([True])))
             # msa_exist = p.starmap(get_attn_from_msa, zip(unique_data['ENST'], unique_data['wt.orig'], cycle([True])))
             # TODO: check MSA again, consider using raw MSA only
@@ -175,7 +176,7 @@ class GraphMutationDataset(Dataset):
     def _set_mutations(self):
         if 'af2_file' not in self.data.columns:
             self.data['af2_file'] = pd.NA
-        with get_context('spawn').Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             point_mutations = p.starmap(utils.get_mutations, zip(self.data['uniprotID'],
                                                                  self.data['ENST'] if 'ENST' in self.data.columns else cycle([None]),
                                                                  self.data['wt.orig'],
@@ -196,7 +197,7 @@ class GraphMutationDataset(Dataset):
         self.af2_file_dict, mutation_idx = np.unique([mutation.af2_file for mutation in self.mutations],
                                                     return_inverse=True)
         _ = list(map(lambda x, y: x.set_af2_seq_index(y), self.mutations, mutation_idx))
-        with get_context("spawn").Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             self.af2_coord_dict = p.starmap(utils.get_coords_from_af2, zip(self.af2_file_dict, cycle([self.add_sidechain])))
             print(f'Finished loading {len(self.af2_coord_dict)} af2 coords')
             self.af2_plddt_dict = p.starmap(utils.get_plddt_from_af2, zip(self.af2_file_dict)) if self.add_plddt else None
@@ -230,7 +231,7 @@ class GraphMutationDataset(Dataset):
         self.esm_file_dict, mutation_idx = np.unique([mutation.ESM_prefix for mutation in self.mutations],
                                                     return_inverse=True)
         _ = list(map(lambda x, y: x.set_esm_seq_index(y), self.mutations, mutation_idx))
-        with get_context("spawn").Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             self.esm_dict = p.starmap(utils.get_esm_dict_from_uniprot, zip(self.esm_file_dict))
             print(f'Finished loading {len(self.esm_file_dict)} esm embeddings')
 
@@ -238,10 +239,10 @@ class GraphMutationDataset(Dataset):
         self.af2_rep_file_prefix_dict, mutation_idx = np.unique([mutation.af2_rep_file_prefix for mutation in self.mutations],
                                                                 return_inverse=True)
         _ = list(map(lambda x, y: x.set_af2_rep_index(y), self.mutations, mutation_idx))
-        with get_context("spawn").Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             if self.add_af2_single and self.loaded_af2_single:
                 self.af2_single_dict = p.starmap(utils.get_af2_single_rep_dict_from_prefix, zip(self.af2_rep_file_prefix_dict))
-            print(f'Finished loading {len(self.af2_rep_file_prefix_dict)} alphafold2 single representations')
+                print(f'Finished loading {len(self.af2_rep_file_prefix_dict)} alphafold2 single representations')
             # because the pairwise representation is too large to fit in RAM, we have to select a subset of them
         if self.add_af2_pairwise and self.loaded_af2_pairwise:
             raise ValueError("Not implemented in this version")
@@ -250,7 +251,7 @@ class GraphMutationDataset(Dataset):
         self.msa_file_dict, mutation_idx = np.unique([mutation.uniprot_id for mutation in self.mutations],
                                                      return_inverse=True)
         _ = list(map(lambda x, y: x.set_msa_seq_index(y), self.mutations, mutation_idx))
-        with get_context('spawn').Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             # msa_dict: msa_seq, conservation, msa
             self.msa_dict = p.starmap(utils.get_msa_dict_from_transcript, zip(self.msa_file_dict))
         print(f'Finished loading {len(self.msa_dict)} msa seqs')
@@ -308,11 +309,6 @@ class GraphMutationDataset(Dataset):
         # cancel self loop
         if not self.loop:
             edge_index_star = edge_index_star[:, edge_index_star[0] != edge_index_star[1]]
-        # cancel nodes that not in edge_index
-        # edge_index_star = edge_index_star[:, np.isin(edge_index_star[0], edge_index.flatten()) &
-        #                                   np.isin(edge_index_star[1], edge_index.flatten())]
-        # prepare edge features
-        # coevo_strength = self.msa_contacts_dict[self.msa_contacts_idx[idx]]
         if self.add_msa_contacts:
             coevo_strength = utils.get_contacts_from_msa(mutation, False)
             if isinstance(coevo_strength, int):
@@ -325,23 +321,11 @@ class GraphMutationDataset(Dataset):
         if self.add_af2_pairwise:
             if self.loaded_af2_pairwise:
                 # we don't use the self.af2_pair_dict anymore because it won't fit in RAM
-                # pairwise_rep = self.af2_pair_dict[mutation.af2_rep_index]
                 # we load from lmdb
                 byteflow = self.af2_pairwise_txn.get(u'{}'.format(mutation.af2_rep_file_prefix.split('/')[-1]).encode('ascii'))
                 pairwise_rep = pickle.loads(byteflow)
                 if pairwise_rep is None:
                     pairwise_rep = utils.get_af2_pairwise_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
-                # instead we load from lmdb
-                # if not hasattr(self, 'af2_pairwise_txn'):
-                #     # open all lmdb in self.af2_pair_dict_lmdb_path
-                #     self.af2_pairwise_env = []
-                #     self.af2_pairwise_txn = []
-                #     for lmdb_path in self.af2_pair_dict_lmdb_path:
-                #         af2_pairwise_env = lmdb.open(lmdb_path, subdir=False, readonly=True, lock=False, readahead=False, meminit=False)
-                #         self.af2_pairwise_txn.append(af2_pairwise_env.begin(write=False, buffers=True))
-                #         self.af2_pairwise_env.append(af2_pairwise_env)
-                # byteflow = self.af2_pairwise_txn[mutation.af2_rep_index // 20].get(u'{}'.format(mutation.af2_rep_index).encode('ascii'))
-                # pairwise_rep = pickle.loads(byteflow)
             else:
                 pairwise_rep = utils.get_af2_pairwise_rep_dict_from_prefix(mutation.af2_rep_file_prefix)
             # crop the pairwise_rep, if necessary
@@ -499,7 +483,7 @@ class GraphMutationDataset(Dataset):
                     msa_seq_check = msa_seq_check[mutation.seq_start - 1: mutation.seq_end]
                     msa_data = msa_data[mutation.seq_start - 1: mutation.seq_end]
                 if msa_seq_check != mutation.seq:
-                    # warnings.warn(f'MSA file: {mutation.transcript_id} does not match mutation sequence')
+                    print(f'Unmatched MSA: {self.unmatched_msa}')
                     msa_data = np.zeros((embed_data.shape[0], 199))
             embed_data = np.concatenate([embed_data, msa_data], axis=1)
             if self.alt_type == 'alt' or self.alt_type == 'zero':
@@ -616,12 +600,6 @@ class GraphMutationDataset(Dataset):
             features['plddt'] = torch.from_numpy(features_np['plddt']).to(torch.float32)
             features['edge_confidence'] = torch.from_numpy(features_np['edge_confidence']).to(torch.float32)
             features['edge_confidence_star'] = torch.from_numpy(features_np['edge_confidence_star']).to(torch.float32)
-        # if self.alt_type == 'concat':
-        #     features['edge_index'] = None
-        #     features['edge_attr'] = None
-        # else:
-        #     features["edge_index"], features["edge_attr"], mask = \
-        #         remove_isolated_nodes(features["edge_index"], features["edge_attr"], x.shape[0])
         if self.neighbor_type == 'radius' or self.neighbor_type == 'radius-KNN':
             # first concat edge_index and edge_index_star
             concat_edge_index = torch.cat((features["edge_index"], features["edge_index_star"]), dim=1)
@@ -701,7 +679,7 @@ class GraphMutationDataset(Dataset):
         subset_af2_file_dict, mutation_idx = np.unique([mutation.af2_file for mutation in self.mutations],
                                                        return_inverse=True)
         # find the index of the af2 file in the subset
-        if self.af2_file_dict is not None:
+        if hasattr(self, 'af2_file_dict') and self.af2_file_dict is not None:
             af2_file_idx = np.array([np.where(self.af2_file_dict==i)[0][0] for i in subset_af2_file_dict])
             self.af2_file_dict = subset_af2_file_dict
             # get the subset of af2 graphs
@@ -713,7 +691,7 @@ class GraphMutationDataset(Dataset):
             # reset the af2_seq_index
             _ = list(map(lambda x, y: x.set_af2_seq_index(y), self.mutations, mutation_idx))
         # get unique esm files
-        if self.esm_file_dict is not None:
+        if hasattr(self, 'esm_file_dict') and self.esm_file_dict is not None:
             subset_esm_file_dict, mutation_idx = np.unique([mutation.ESM_prefix for mutation in self.mutations],
                                                         return_inverse=True)
             # find the index of the esm file in the subset
@@ -724,7 +702,7 @@ class GraphMutationDataset(Dataset):
             # reset the esm_seq_index
             _ = list(map(lambda x, y: x.set_esm_seq_index(y), self.mutations, mutation_idx))
         # get unique msa files
-        if self.msa_file_dict is not None:
+        if hasattr(self, 'msa_file_dict') and self.msa_file_dict is not None:
             subset_msa_file_dict, mutation_idx = np.unique([mutation.uniprot_id for mutation in self.mutations],
                                                            return_inverse=True)
             # find the index of the msa file in the subset
@@ -817,8 +795,21 @@ class GraphMutationDataset(Dataset):
 
     def load_all_to_memory(self):
         # load all data into memory
-        self.parsed_data = [self.get(i) for i in range(len(self))]
         self.get_method = 'memory'
+        self.parsed_data = []
+        ctime = time.time()
+        tmp_data = []
+        app = tmp_data.append
+        for i in range(len(self)):
+            app(self.get(i))
+            if (i+1) % 200 == 0:
+                print(f'rank {self.gpu_id} Finished loading {i+1} points in {time.time() - ctime:.2f} seconds')
+                ctime = time.time()
+                self.parsed_data.extend(tmp_data)
+                tmp_data = []
+                app = tmp_data.append
+                print(f'rank {self.gpu_id} Extended {i+1} points in {time.time() - ctime:.2f} seconds')
+        self.parsed_data.extend(tmp_data)
         # safe to delete all 'dict' data
         if hasattr(self, 'af2_file_dict'):
             del self.af2_file_dict
@@ -1009,7 +1000,7 @@ class FullGraphMutationDataset(TorchDataset):
         print(f"found {len(unique_data)} unique wt sequences")
         # only check embeddings if we are using esm
         if self.node_embedding_type == 'esm':
-            with get_context('spawn').Pool(NUM_THREADS) as p:
+            with Pool(NUM_THREADS) as p:
                 embedding_exist = p.starmap(utils.get_embedding_from_esm2, zip(unique_data['uniprotID'], cycle([True])))
             # msa_exist = p.starmap(get_attn_from_msa, zip(unique_data['ENST'], unique_data['wt.orig'], cycle([True])))
             # TODO: check MSA again, consider using raw MSA only
@@ -1022,7 +1013,7 @@ class FullGraphMutationDataset(TorchDataset):
     def _set_mutations(self):
         if 'af2_file' not in self.data.columns:
             self.data['af2_file'] = pd.NA
-        with get_context('spawn').Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             point_mutations = p.starmap(utils.get_mutations, zip(self.data['uniprotID'],
                                                                  self.data['ENST'] if 'ENST' in self.data.columns else cycle([None]),
                                                                  self.data['wt.orig'],
@@ -1043,7 +1034,7 @@ class FullGraphMutationDataset(TorchDataset):
         self.af2_file_dict, mutation_idx = np.unique([mutation.af2_file for mutation in self.mutations],
                                                     return_inverse=True)
         _ = list(map(lambda x, y: x.set_af2_seq_index(y), self.mutations, mutation_idx))
-        with get_context("spawn").Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             self.af2_coord_dict = p.starmap(utils.get_coords_from_af2, zip(self.af2_file_dict, cycle([self.add_sidechain])))
             print(f'Finished loading {len(self.af2_coord_dict)} af2 coords')
             self.af2_plddt_dict = p.starmap(utils.get_plddt_from_af2, zip(self.af2_file_dict)) if self.add_plddt else None
@@ -1061,7 +1052,7 @@ class FullGraphMutationDataset(TorchDataset):
         self.esm_file_dict, mutation_idx = np.unique([mutation.ESM_prefix for mutation in self.mutations],
                                                     return_inverse=True)
         _ = list(map(lambda x, y: x.set_esm_seq_index(y), self.mutations, mutation_idx))
-        with get_context("spawn").Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             self.esm_dict = p.starmap(utils.get_esm_dict_from_uniprot, zip(self.esm_file_dict))
             print(f'Finished loading {len(self.esm_file_dict)} esm embeddings')
 
@@ -1069,7 +1060,7 @@ class FullGraphMutationDataset(TorchDataset):
         self.af2_rep_file_prefix_dict, mutation_idx = np.unique([mutation.af2_rep_file_prefix for mutation in self.mutations],
                                                                 return_inverse=True)
         _ = list(map(lambda x, y: x.set_af2_rep_index(y), self.mutations, mutation_idx))
-        with get_context("spawn").Pool(NUM_THREADS) as p:
+        with Pool(NUM_THREADS) as p:
             if self.add_af2_single and self.loaded_af2_single:
                 self.af2_single_dict = p.starmap(utils.get_af2_single_rep_dict_from_prefix, zip(self.af2_rep_file_prefix_dict))
             print(f'Finished loading {len(self.af2_rep_file_prefix_dict)} alphafold2 single representations')
@@ -1436,7 +1427,7 @@ class FullGraphMutationDataset(TorchDataset):
          self.txn = self.env.begin(write=False, buffers=True)
     
     def get_from_lmdb(self, idx):
-        if not hasattr(self, 'txn'):
+        if not hasattr(self, 'txn') or self.txn is None:
             self.open_lmdb()
         byteflow = self.txn.get(u'{}'.format(self.lmdb_idx_map[idx]).encode('ascii'))
         if byteflow is None:
@@ -2947,6 +2938,7 @@ class FullGraphMultiOnesiteMutationDataset(FullGraphMutationDataset):
         return features
 
 
+# Not used in this version
 def collate(
     data_list: List[BaseData],
     increment: bool = True,

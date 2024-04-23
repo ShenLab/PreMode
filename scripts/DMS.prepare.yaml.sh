@@ -43,19 +43,17 @@ if grep -q "_by_anno" $1/pretrain.seed.0.yaml; then
     changed_data=true
 fi
 # prepare yaml files for all tasks
-for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab $(cat scripts/gene.pfams.txt) fluorescence $(cat scripts/gene.txt)
+for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab $(cat scripts/gene.txt) $(cat scripts/gene.itan.txt) $(cat scripts/gene.pfams.txt) fluorescence
 do
   # use original yaml as template
   cp $1/pretrain.seed.0.yaml $1/$gene.yaml
   # ngpu should be 1
-  sed -i "s|ngpus: "$ngpus"|ngpus: 1|g" $1/$gene.yaml
+  sed -i "s|ngpus: "$ngpus"|ngpus: 1\nuse_lora: |g" $1/$gene.yaml
   # learning rate should be half
   sed -i "s|lr: "$lr"|lr: "$half_lr"|g" $1/$gene.yaml
   sed -i "s|lr_min: "$lr_min"|lr_min: "$half_lr_min"|g" $1/$gene.yaml
   # change data type
   sed -i "s|data_type: ClinVar|data_type: "$gene"|g" $1/$gene.yaml
-  # change data split fn
-  # sed -i "s|data_split_fn: "$data_split"|data_split_fn: _by_good_batch|g" $1/$gene.yaml
   # change loss fn
   sed -i "s|loss_fn: "$loss_fn"|loss_fn: mse_loss|g" $1/$gene.yaml
   # change logdir
@@ -85,37 +83,37 @@ done
 
 # if original loss_fn is combined_loss or weighted_combined_loss, change loss back
 if [ "$loss_fn" == "combined_loss" ] || [ "$loss_fn" == "weighted_combined_loss" ] || [ "$loss_fn" == "GP_loss" ]; then
-  for gene in $(cat scripts/gene.txt) $(cat scripts/gene.pfams.txt)
+  for gene in $(cat scripts/gene.txt) $(cat scripts/gene.itan.txt) $(cat scripts/gene.pfams.txt)
   do
     sed -i "s|loss_fn: mse_loss|loss_fn: "$loss_fn"|g" $1/$gene.yaml
   done
 fi
 
 # for human genes, load_model based on the best model in pretrain
-for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab $(cat scripts/gene.txt) $(cat scripts/gene.pfams.txt)
+for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab $(cat scripts/gene.txt) $(cat scripts/gene.itan.txt) $(cat scripts/gene.pfams.txt)
 do
   # change load model
   orig_load_model=$(cat $1/pretrain.seed.0.yaml | grep ^load_model | sed 's/.*: //' | sed 's/ #.*//g')
   sed -i "s|load_model: "$orig_load_model"|load_model: "$best_model"|g" $1/$gene.yaml
   sed -i "s|partial_load_model: true|partial_load_model: false|g" $1/$gene.yaml
-  # change num epochs to 4 times larger
+  # change num epochs to 2 times larger
   sed -i "s|num_epochs: "$num_epochs"|num_epochs: "$(($num_epochs))"|g" $1/$gene.yaml
   # warm up steps should be 20 times lower
   sed -i "s|lr_warmup_steps: "$lr_warmup_steps"|lr_warmup_steps: "$(($lr_warmup_steps/20))"|g" $1/$gene.yaml
   # num saved batches should be 20 times lower
-  if [[ "PTEN CCR5 CXCR4 NUDT15 DDX3X" == *"$gene"* ]]; then
+  if [[ "PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA DDX3X" == *"$gene"* ]]; then
       sed -i "s|num_save_batches: "$num_save_batches"|num_save_batches: "$(($target_num_save_batches))"|g" $1/$gene.yaml
   else
     if [[ ! "Stab" == *"$gene"* ]]; then
-      sed -i "s|num_save_batches: "$num_save_batches"|num_save_batches: "$(($target_num_save_batches/4))"|g" $1/$gene.yaml
+      sed -i "s|num_save_batches: "$num_save_batches"|num_save_batches: "$(($target_num_save_batches/80))"|g" $1/$gene.yaml
     fi
   fi
 done
 
 # for Human DMS tasks, data should be changed
-for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab 
+for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab
 do
-  sed -i "s|pretrain|"$gene"|g" $1/$gene.yaml
+  sed -i "s|pretrain/|"$gene"/|g" $1/$gene.yaml
   # add a new line that specifies "convert_to_onesite: true"
   echo "convert_to_onesite: true" >> $1/$gene.yaml
   # change num steps update
@@ -134,6 +132,12 @@ do
   fi
 done
 
+for gene in PTEN NUDT15 SNCA CYP2C9 GCK ASPA CXCR4 CCR5 
+do
+  # change num epochs to 2 times larger
+  sed -i "s|num_epochs: "$num_epochs"|num_epochs: "$(($num_epochs*2))"|g" $1/$gene.yaml
+done
+
 for gene in PTEN PTEN.bin NUDT15 SNCA CYP2C9 GCK ASPA Stab 
 do
   sed -i "s|output_dim: 1|output_dim: 2|g" $1/$gene.yaml
@@ -149,9 +153,9 @@ do
   sed -i "s|num_epochs: "$num_epochs"|num_epochs: "$(($num_epochs))"|g" $1/$gene.yaml
 done
 
-for gene in $(cat scripts/gene.txt) $(cat scripts/gene.pfams.txt)
+for gene in $(cat scripts/gene.txt) $(cat scripts/gene.itan.txt) $(cat scripts/gene.pfams.txt)
 do
-  sed -i "s|pretrain|ICC.seed.0/"$gene"|g" $1/$gene.yaml
+  sed -i "s|pretrain/|ICC.seed.0/"$gene"/|g" $1/$gene.yaml
   # sed -i "s|BinaryClassification|Tanh|g" $1/$gene.yaml
   sed -i "s|train_size: 0.95|train_size: 0.75|g" $1/$gene.yaml
   sed -i "s|val_size: 0.05|val_size: 0.25|g" $1/$gene.yaml
@@ -170,11 +174,7 @@ done
 # for non human data, change learning rates and data split fn
 for gene in fluorescence
 do
-  if [[ "fluorescence" == "$gene" ]]; then
-      sed -i "s|pretrain|"$gene"|g" $1/$gene.yaml
-  else
-      sed -i "s|pretrain|"$gene"|g" $1/$gene.yaml
-  fi
+  sed -i "s|pretrain/|"$gene"/|g" $1/$gene.yaml
   # change to large learning rate
   sed -i "s|lr: "$half_lr"|lr: "$lr"|g" $1/$gene.yaml
   # # change to large batch size
@@ -188,7 +188,7 @@ do
 done
 
 # change seed
-for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab $(cat scripts/gene.txt) $(cat scripts/gene.pfams.txt) fluorescence
+for gene in PTEN PTEN.bin CCR5 CXCR4 NUDT15 SNCA CYP2C9 GCK ASPA Stab $(cat scripts/gene.txt) $(cat scripts/gene.itan.txt) $(cat scripts/gene.pfams.txt) fluorescence
 do
   # use original yaml as template
   mv $1/$gene.yaml $1/$gene.seed.0.yaml
@@ -203,24 +203,35 @@ do
   mv $1/$gene.seed.*.yaml $1/$gene
 done
 
-# create PTEN replicates
-mkdir $1/PTEN.replicates/
+mkdir $1/PTEN.replicates.rest/
 for replicate in {1..8}
 do
-	cp $1/PTEN/PTEN.seed.0.yaml $1/PTEN.replicates/PTEN.replicate.$replicate.yaml
-	sed -i "s|output_dim: 2|output_dim: 1|g" $1/PTEN.replicates/PTEN.replicate.$replicate.yaml
-	sed -i "s|PTEN|PTEN.replicate."$replicate"|g" $1/PTEN.replicates/PTEN.replicate.$replicate.yaml
+        cp $1/PTEN/PTEN.seed.0.yaml $1/PTEN.replicates.rest/PTEN.replicate.rest.$replicate.yaml
+        sed -i "s|output_dim: 2|output_dim: 1|g" $1/PTEN.replicates.rest/PTEN.replicate.rest.$replicate.yaml
+        sed -i "s|PTEN|PTEN.replicate.rest."$replicate"|g" $1/PTEN.replicates.rest/PTEN.replicate.rest.$replicate.yaml
 done
 
 bash scripts/DMS.subset.prepare.yaml.sh $1
 
-# run IonChannel and ICC with five fold cross validation
-for gene in $(cat scripts/gene.txt) $(cat scripts/gene.pfams.txt)
+# for all genes, prepare a large window version
+need_large_window_list=$(cat scripts/gene.txt)" "$(cat scripts/gene.itan.txt)" "$(cat scripts/gene.pfams.txt)
+added_large_window_list=""
+for gene in $need_large_window_list
 do
-  # if gene is Heyne, don't do 5 fold cross validation
-  if [[ "Heyne" == *"$gene"* ]]; then
-    continue
-  fi
+  added_large_window_list=$added_large_window_list" "$gene".large.window"
+done
+# do large window list
+for gene in $need_large_window_list
+do
+  mkdir $1/$gene.large.window/
+  cp $1/$gene/$gene.seed.0.yaml $1/$gene.large.window/$gene.large.window.seed.0.yaml
+  sed -i "s|max_len: 251|max_len: 1251|g" $1/$gene.large.window/$gene.large.window.seed.0.yaml
+  sed -i "s|log_dir: "$logdir"TL."$gene".seed.0/|log_dir: "$logdir"TL."$gene".large.window.seed.0/|g" $1/$gene.large.window/$gene.large.window.seed.0.yaml
+done
+
+# run IonChannel and ICC with five fold cross validation
+for gene in $(cat scripts/gene.txt) $(cat scripts/gene.itan.txt) $(cat scripts/gene.pfams.txt) $added_large_window_list
+do
   mkdir $1/$gene.5fold/
   cp $1/$gene/$gene.seed.0.yaml $1/$gene.5fold/$gene.fold.0.yaml
   for fold in {1..4}
@@ -232,16 +243,26 @@ do
 done
 
 # run ICC genes with five fold cross validation in subsets
-for gene in Q09428 P15056 O00555 Q14654 P07949 P04637
+for gene in $(cat scripts/gene.txt)
 do
-  for subset in {1..5}
+  # use ratio of 1 2 4 6
+  for subset in 1 2 4 6
   do
     mkdir $1/$gene.subset.$subset.5fold/
     cp -r $1/$gene.5fold/* $1/$gene.subset.$subset.5fold/
     for fold in {0..4}
     do
-      sed -i "s|"$gene"|"$gene".subset."$subset"|g" $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml
-      sed -i 's|data_split_fn: ""|data_split_fn: _by_anno|g' $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml
+      # change num_save_batches to 2 if subset is 1 and 2
+      if [[ $subset -lt 3 ]]; then
+        sed -i "s|num_save_batches: "$(($target_num_save_batches/80))"|num_save_batches: "$(($target_num_save_batches/200))"|g" $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml
+        # warm up steps should be 200 times lower
+        sed -i "s|lr_warmup_steps: "$(($lr_warmup_steps/20))"|lr_warmup_steps: "$(($lr_warmup_steps/400))"|g" $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml
+      else
+        # warm up steps should be 80 times lower
+        sed -i "s|lr_warmup_steps: "$(($lr_warmup_steps/20))"|lr_warmup_steps: "$(($lr_warmup_steps/200))"|g" $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml
+      fi
+      # use the subset2 data, not the subset
+      sed -i "s|"$gene"|"$gene".subset2."$subset"|g" $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml
       mv $1/$gene.subset.$subset.5fold/$gene.fold.$fold.yaml $1/$gene.subset.$subset.5fold/$gene.subset.$subset.fold.$fold.yaml
     done
   done
@@ -265,5 +286,4 @@ echo $changed_data
 if [ $changed_data = true ]; then
   echo "change data-file-train back to original yaml"
   mv $1/pretrain.seed.0.yaml.bak $1/pretrain.seed.0.yaml
-  #sed -i "s|ClinVar.HGMD.PrimateAI.syn/|ClinVar.HGMD.PrimateAI.syn/"$data_prefix"/|g" $1/pretrain.seed.0.yaml
 fi

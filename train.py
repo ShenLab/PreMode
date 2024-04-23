@@ -14,8 +14,6 @@ import data
 from model import model
 from model.model import create_model, create_model_and_load
 from model.trainer import data_distributed_parallel_gpu, PreMode_trainer, single_thread_gpu, ray_tune, single_thread_gpu_4_fold
-from model.trainer_noGraph import PreMode_trainer_noGraph
-from model.trainer_ssp import PreMode_trainer_SSP
 from utils.configs import save_argparse, LoadFromFile
 from captum.attr import IntegratedGradients
 from functools import partial
@@ -62,6 +60,8 @@ def get_args():
                         help='Whether to use CB as distance or not')
     parser.add_argument('--add-msa', type=bool, default=False,
                         help='Whether to add msa to features or not')
+    parser.add_argument('--zero-msa', type=bool, default=False,
+                        help='Whether to zero msa features or not')
     parser.add_argument('--add-msa-contacts', type=bool, default=True,
                         help='Whether to add msa contacts to features or not')
     parser.add_argument('--add-confidence', type=bool, default=False,
@@ -313,6 +313,7 @@ def main(args, continue_train=False, four_fold=False):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
+                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -410,6 +411,7 @@ def adaptive_main(args):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
+                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -574,6 +576,7 @@ def hp_tune(args):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
+                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -678,6 +681,7 @@ def _test(args):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
+                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -816,6 +820,7 @@ def interpret(args, idxs=None, epoch=None, step=None, dryrun=False, four_fold=Fa
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
+                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -1155,53 +1160,6 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None, dryrun=False
         return x_embed_df, ys, min_loss
     else:
         return x_embed_df
-
-
-def interpret_datapoint(idx):
-    with open(f'/share/vault/Users/gz2294/RESCVE/CHPs.ContactsOnly.1280Dim.Star.SoftMax.pLDDT/attn_weights.{idx}.pkl',
-              'rb') as f:
-        tmp = pickle.load(f)
-    attn_weight_layers, batch, datapoint, point_mutation, loss, y = tmp
-    attn_weight_1 = attn_weight_layers[0].detach().cpu().numpy()
-    tmp = np.split(attn_weight_1, [2, attn_weight_1.shape[1] + 1], axis=1)
-    edge_idx_1 = tmp[0]
-    attn_weight_1 = tmp[1]
-    attn_weight_2 = attn_weight_layers[1].detach().cpu().numpy()
-    tmp = np.split(attn_weight_2, [2, attn_weight_2.shape[1] + 1], axis=1)
-    edge_idx_2 = tmp[0]
-    attn_weight_2 = tmp[1]
-    # find the highest attention in each attention head
-    max_layer_1 = np.zeros((0, attn_weight_1.shape[1]))
-    min_layer_1 = np.zeros((0, attn_weight_1.shape[1]))
-    max_layer_2 = np.zeros((0, attn_weight_2.shape[1]))
-    min_layer_2 = np.zeros((0, attn_weight_2.shape[1]))
-    target_node_layer_1 = np.unique(edge_idx_1[:, 1])
-    target_node_layer_2 = np.unique(edge_idx_2[:, 1])
-    for target_node in target_node_layer_1:
-        target_node_attn = attn_weight_1[edge_idx_1[:, 1] == target_node]
-        max_start_node = [edge_idx_1[np.argmax(target_node_attn[:, i]), 0] + point_mutation.seq_start
-                          for i in range(target_node_attn.shape[1])]
-        min_start_node = [edge_idx_1[np.argmin(target_node_attn[:, i]), 0] + point_mutation.seq_start
-                          for i in range(target_node_attn.shape[1])]
-        max_layer_1 = np.vstack((max_layer_1, np.array(max_start_node)))
-        min_layer_1 = np.vstack((min_layer_1, np.array(min_start_node)))
-    for target_node in target_node_layer_2:
-        target_node_attn = attn_weight_2[edge_idx_2[:, 1] == target_node]
-        max_start_node = [edge_idx_2[np.argmax(target_node_attn[:, i]), 0] + point_mutation.seq_start
-                          for i in range(target_node_attn.shape[1])]
-        min_start_node = [edge_idx_2[np.argmin(target_node_attn[:, i]), 0] + point_mutation.seq_start
-                          for i in range(target_node_attn.shape[1])]
-        max_layer_2 = np.vstack((max_layer_2, np.array(max_start_node)))
-        min_layer_2 = np.vstack((min_layer_2, np.array(min_start_node)))
-    max_layer_1 = pd.DataFrame(max_layer_1, columns=[f"attn_head_{i}" for i in range(attn_weight_1.shape[1])],
-                               index=target_node_layer_1 + point_mutation.seq_start)
-    min_layer_1 = pd.DataFrame(min_layer_1, columns=[f"attn_head_{i}" for i in range(attn_weight_1.shape[1])],
-                               index=target_node_layer_1 + point_mutation.seq_start)
-    max_layer_2 = pd.DataFrame(max_layer_2, columns=[f"attn_head_{i}" for i in range(attn_weight_2.shape[1])],
-                               index=target_node_layer_2 + point_mutation.seq_start)
-    min_layer_2 = pd.DataFrame(min_layer_2, columns=[f"attn_head_{i}" for i in range(attn_weight_2.shape[1])],
-                               index=target_node_layer_2 + point_mutation.seq_start)
-    return max_layer_1, min_layer_1, max_layer_2, min_layer_2, batch, datapoint, loss, y
 
 
 def test_scalar_invariance(args):

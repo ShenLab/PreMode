@@ -21,7 +21,7 @@ max_len: 251
 radius: 50 # radius for KNN graph, larger than curoff_upper
 
 ## model specific
-load_model: ./PreMode.results/PreMode.seed.0/model.step.30000.pt
+load_model: ./PreMode.results/PreMode/model.step.46000.pt
 model_class: PreMode_Star_CON
 model: equivariant-transformer-star2-softmax
 neighbor_embedding: true
@@ -66,7 +66,8 @@ num_steps_update: 1 # important, how many steps before updating the model, use l
 lr_warmup_steps: 200 # important
 batch_size: 8
 ngpus: 1
-num_epochs: 20
+use_lora: 
+num_epochs: 40
 loss_fn: mse_loss
 data_split_fn: ""
 y_weight: 1.0
@@ -80,7 +81,7 @@ val_size: 0.05
 ## log specific
 num_save_epochs: 1
 num_save_batches: 400 # save every 1000 batches, this also control the validation frequency
-log_dir: ./PreMode.results/PreMode.seed.0/TL.PTEN.subset.4.seed.3/
+log_dir: ./PreMode.results/PreMode/TL.PTEN.subset.4.seed.3/
 
 loaded_confidence: true
 loaded_esm: true

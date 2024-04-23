@@ -81,7 +81,7 @@ val_size: 0.05
 ## log specific
 num_save_epochs: 1
 num_save_batches: 2000 # save every 1000 batches, this also control the validation frequency
-log_dir: ./PreMode.results/PreMode.mean.var.seed.0/TL.fluorescence.seed.1/
+log_dir: ./PreMode.results/PreMode.mean.var/TL.fluorescence.seed.1/
 
 loaded_confidence: true
 loaded_esm: true

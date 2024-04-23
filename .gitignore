@@ -1,4 +1,7 @@
 archive/
+analysis/5genes.all.mut/inference.results/
+PreMode.results/archive/
+scripts/archive/
 analysis/archive/
 analysis/Hsu.et.al.git/1900_weights/*
 analysis/Hsu.et.al.git/data/*
@@ -9,3 +12,5 @@ data.files/af2.files.tgz*
 data.files/esm.files.tgz*
 data.files/esm.MSA.tgz*
 data.files/gMVP.MSA.tgz*
+copy.files.sh
+remove.columns.R

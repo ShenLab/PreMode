@@ -1,103 +1,82 @@
-# visualize with dssp secondary structure 
 library(ggplot2)
-library(bio3d)
-library(patchwork)
-library(data.table)
-genes <- c("Q99250", "Q14524", "O00555")
-gene.names <- c("SCN2A", "SCN5A", "CACNA1A")
-
-# af2.seqs <- read.csv('~/Data/af2_uniprot/swissprot_and_human.csv', row.names = 1)
-aa.dict <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
-             'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
-log.dir <- 'PreMode.inference/'
-# auc.dir <- '../scripts/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim/'
-# use.logits <- 'meta.logits'
-folds <- c(0:4)
-# source('~/Pipeline/plot.genes.scores.heatmap.R')
-source('./AUROC.R')
-# prepare heyne feature table
-famcacscn <- as.data.frame(fread("./funNCion/scncacaa_familyalignedCACNA1Acantranscript.txt"))
-featuretable <- fread("./funNCion/featuretable4github_revision.txt")
-featuretable[,(c("chr", "genomic_pos", "USED_REF", "STRAND","Feature", "inpp2")):=NULL] 
-featuretable[,(c(grep("dens", colnames(featuretable)))):=NULL] # remove all variant density features
-# rmv most correlated variables (as previously identified with caret preprocessing fcts)
-featuretable[,(c("H", "caccon", "SF_DEKA")):=NULL] 
-featuretable <- unique(featuretable)
-# get heyne training variants
-varall <- fread("./funNCion/SupplementaryTable_S1_pathvariantsusedintraining_revision2.txt")
-varall <- varall[used_in_functional_prediction%in%1]
-varall <- varall[prd_mech_revised%in%c("lof", "gof")]
-# remove duplicate sites:
-varall <- varall[!duplicated(varall[,c("gene", "altAA", "pos")])]
-source("./funNCion/R_functions4predicting_goflof_CACNA1SCN.R")
-# for three genes, first only visualize seed 0
-result.plot <- data.frame()
-for (o in 1:length(genes)) {
-  for (fold in 0:4) {
-    gene <- genes[o]
-    print(gene)
-    premode.yaml <- yaml::read_yaml(paste0('../scripts/PreMode/', 
-                                           gene, '.5fold/', gene, '.fold.', fold, '.yaml'))
-    gene.training <- read.csv(paste0('../', premode.yaml$data_file_train), row.names = 1)
-    gene.testing.result <- read.csv(paste0(log.dir, gene, '/testing.fold.', fold, '.csv'))
-    # heyne training
-    gene.training$protid <- paste(gene.names[o], gene.training$pos.orig, gene.training$ref, gene.training$alt, sep = ":")
-    gene.testing.result$protid <- paste(gene.names[o], gene.testing.result$pos.orig, gene.testing.result$ref, gene.testing.result$alt, sep = ":")
-    varall.protid <- varall$protid[varall$protid %in% gene.training$protid]
-    # load heyne feature mat
-    feat.train <- featuretable[match(varall.protid, protid)] #, nomatch=0L
-    feat.train$Class <- varall$prd_mech_revised[match(varall.protid, varall$protid)]
-    feat.train <- feat.train[complete.cases(feat.train),]
-    feat.test <- featuretable[match(gene.testing.result$protid, protid)] #, nomatch=0L
-    feat.test$Class <- 'gof'
-    feat.test$Class[gene.testing.result$score==-1] <- 'lof'
-    feat.test <- feat.test[complete.cases(feat.test),]
-    
-    heyne.auc <- predictgof_manual_split(trainingall = feat.train, testing=feat.test, modeltype = "gbm", featuretable = featuretable, alignmentfile = famcacscn)
-    heyne.auc <- max(heyne.auc, 1-heyne.auc)
-    # gene.testing.result <- gene.testing.result[gene.testing.result$unique.id %in% heyne.testing.result$unique.id,]
-    premode.auc <- plot.AUC(gene.testing.result$score, gene.testing.result$logits)
-    # heyne.auc <- plot.AUC(as.numeric(as.factor(outi[[1]]$obs))-1, as.numeric(outi[[1]]$gof))
-    result.plot <- rbind(result.plot, data.frame(AUC=c(premode.auc$auc, heyne.auc), 
-                                                 model=c('PreMode', 'FunCion (sklearn)'),
-                                                 fold=fold,
-                                                 HGNC=paste0(gene.names[o], '\n(5 random splits)')))
+result.plot <- readRDS('figs/fig.5.prepare.RDS')
+result.plot <- result.plot[result.plot$task.type=='Gene',]
+result.plot$use.lw <- F
+# remove itan tasks
+result.plot <- result.plot[!grepl('.itan.split', result.plot$task.id),]
+pick.cond <- 'auc'
+# get unique models
+uniq.models <- unique(gsub('.lw', '', result.plot$model))
+# only keep the original models
+uniq.models <- uniq.models[grepl('/$', uniq.models)]
+# get unique genes, remove Q14524
+uniq.genes <- unique(result.plot$task.id)
+uniq.genes <- uniq.genes[uniq.genes != "Q14524"]
+# for each gene and each fold, decide weather to use large window
+for (g in uniq.genes) {
+  for (m in uniq.models) {
+    for (f in 0:4) {
+      lw.loss <- result.plot$val.loss[result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f]
+      loss <- result.plot$val.loss[result.plot$model == m & result.plot$task.id == g & result.plot$fold==f]
+      lw.tr.auc <- result.plot$tr.auc[result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f]
+      tr.auc <- result.plot$tr.auc[result.plot$model == m & result.plot$task.id == g & result.plot$fold==f]
+      if (pick.cond == 'auc') {
+        cond <- !is.na(mean(lw.tr.auc)) & lw.tr.auc > tr.auc
+      } else if (pick.cond == 'loss') {
+        cond <- !is.na(mean(lw.loss)) & loss > lw.loss
+      } else if (pick.cond == 'auc+loss') {
+        cond <- !is.na(lw.loss) & !is.na(lw.tr.auc) & (tr.auc/loss > lw.tr.auc/lw.loss)
+      } else {
+        cond <- F
+      }
+      if (cond) {
+        # use lw
+        to.remove <- which(result.plot$model == m & result.plot$task.id == g & result.plot$fold==f)
+        to.anno <- which(result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f)
+        result.plot$model[to.anno] <- m
+        result.plot$use.lw[to.anno] <- T
+        result.plot <- result.plot[-to.remove,]
+      } else {
+        to.remove <- which(result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f)
+        result.plot <- result.plot[-to.remove,]
+      }
+    }
   }
 }
 
-# add results for all
-for (fold in 0) {
-  gene.testing.result <- read.csv(paste0(log.dir, 'Heyne/testing.seed.', fold, '.csv'))
-  heyne.result <- read.csv('./funNCion/fuNCion.predictions.csv', row.names = 1)
-  premode.auc <- plot.AUC(gene.testing.result$score, gene.testing.result$logits)
-  heyne.auc <- plot.AUC(as.numeric(as.factor(heyne.result$obs))-1, heyne.result$gof)
-  result.plot <- rbind(result.plot, data.frame(AUC=c(premode.auc$auc, heyne.auc$auc, heyne.result$auc[1]), 
-                                               model=c('PreMode', 'FunCion (R)', 'FunCion (sklearn)'),
-                                               fold=fold,
-                                               HGNC='ALL Ion Channels\n(FunCion paper split)'))
-}
-
+result.plot <- result.plot[!result.plot$task.id %in% c('Q14524'),]
+result.plot$task.name[result.plot$task.id == "Q14524.clean"] <- "Gene: SCN5A"
+result.plot <- result.plot[result.plot$model %in% c("PreMode/",
+                                                    "PreMode.ptm/"
+                                                    ),]
+model.dic <- c("PreMode/"="1: PreMode",
+               "PreMode.ptm/"="8: PreMode: add ptm")
+result.plot$model <- model.dic[result.plot$model]
 num.models <- length(unique(result.plot$model))
-p <- ggplot(result.plot, aes(y=AUC, x=HGNC, col=model)) +
-  geom_point(alpha=0) +
-  scale_color_manual(values = c("#A3A500", "#00BA38", "#F8766D")) + 
+p1 <- ggplot(result.plot, aes(y=auc, x=task.name, col=model)) +
+  geom_point(alpha=0) + 
+  scale_color_manual(values = c("#F8766D", "#00BA38")) + 
   stat_summary(data = result.plot,
-               aes(x=as.numeric(factor(HGNC))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
-                   y = AUC, col=model), 
+               aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
+                   y = auc, col=model), 
                fun.data = mean_se, geom = "errorbar", width = 0.2) +
   stat_summary(data = result.plot, 
-               aes(x=as.numeric(factor(HGNC))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
-                   y = AUC, col=model), 
+               aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
+                   y = auc, col=model), 
                fun.data = mean_se, geom = "point") +
-  labs(x = "HGNC", y = "AUC", fill = "model") +
+  labs(x = "task", y = "AUC", fill = "model") +
   theme_bw() + 
   theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
-        text = element_text(size = 13),
+        text = element_text(size = 16),
+        plot.title = element_text(size=15),
+        legend.text = element_text(size=10),
         legend.position="bottom", 
         legend.direction="horizontal") +
-  ggtitle('PreMode compared to FuNCion method\nin Ion Channel genes') +
+  ggtitle('PreMode Ablation Analysis') +
   ggeasy::easy_center_title() +
-  coord_flip() + guides(col=guide_legend(ncol=3)) +
-  ylim(0.5, 1) + xlab('task: Genetics Level Mode of Action') 
-ggsave(paste0('figs/fig.sup.8b.pdf'), p, height = 6, width = 6)
+  coord_flip() + guides(col=guide_legend(nrow=2),
+                        shape=guide_legend(nrow=2)) +
+  ylim(0.25, 1) + xlab('task: Genetics Level Mode of Action') 
+ggsave(paste0('figs/fig.sup.8b.pdf'), p1, height = 5, width = 6)
+
 

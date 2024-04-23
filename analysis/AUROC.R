@@ -1,4 +1,4 @@
-plot.AUC <- function(scores, logits, filename=NA) {
+plot.AUC <- function(scores, logits, filename=NA, rev.ok=F) {
   library(PRROC)
   all.scores <- unique(scores)
   if (0 %in% all.scores & ! -1 %in% all.scores) {
@@ -32,7 +32,7 @@ plot.AUC <- function(scores, logits, filename=NA) {
       PRROC.dnv.df <- roc.curve(scores.class0 = logits[scores==neg.score],
                                 scores.class1 = logits[scores==pos.score],
                                 curve=TRUE)
-      if (PRROC.dnv.df$auc < 0.5) {
+      if (rev.ok & PRROC.dnv.df$auc < 0.5) {
         PRROC.dnv.df <- roc.curve(scores.class1 = logits[scores==neg.score],
                                   scores.class0 = logits[scores==pos.score],
                                   curve=TRUE)

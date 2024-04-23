@@ -798,112 +798,13 @@ class PreMode_trainer(object):
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '15423'
+    os.environ['MASTER_PORT'] = '15433'
     # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
 
 def cleanup():
     dist.destroy_process_group()
-
-
-def data_distributed_parallel_gpu_archive(rank, model, hparams, datasets, trainer_fn=None):
-    # set up training processes
-    # Currently have bug if batch size does not match
-    global result_dict
-    world_size = hparams.ngpus
-    epochs = hparams.num_epochs
-    save_every_step = hparams.num_save_batches
-    save_every_epoch = hparams.num_save_epochs
-    setup(rank, world_size)
-    device = f'cuda:{rank}'
-    torch.cuda.set_per_process_memory_fraction(1.0, rank)
-    model = model.to(device)
-    
-    ddp_model = DDP(model, device_ids=[rank], output_device=rank)
-    ddp_model.train()
-    
-    trainer = trainer_fn(hparams=hparams, model=ddp_model, dataset=datasets[rank], device_id=rank)
-    # begin training
-    with Join([trainer.model]):
-        for i in range(epochs):
-            epoch_start_time = time.time()
-            train_finished = False
-            trainer.training_epoch_begin()
-            while not train_finished:
-                try:
-                    batch_start_time = time.time()
-                    loss = trainer.training_step()
-                    if trainer.global_step % hparams.num_steps_update == 0:
-                        # only update every num_steps_update steps, to save memory
-                        trainer.optimizer_step(loss)
-                    batch_end_time = time.time()
-                    print(f"Rank {rank} batch {trainer.global_step} time: {batch_end_time - batch_start_time}")
-                    dist.barrier()
-                    if trainer.global_step % save_every_step == 0:
-                        if rank == 0:
-                            trainer.write_model(step=trainer.global_step)
-                        # validate every save_every_step steps
-                        if trainer.val_dataset is not None:
-                            val_finished = False
-                            trainer.validation_epoch_begin()
-                            while not val_finished:
-                                try:
-                                    trainer.validation_step()
-                                    dist.barrier()
-                                except StopIteration:
-                                    val_finished = True
-                        result_dict = trainer.validation_epoch_end(reset_train_loss=True)
-                        print(f"Rank {rank} batch {trainer.global_step} result: {result_dict}")
-                        with open(
-                                f"{hparams.log_dir}/result_dict.batch.{trainer.global_step}.ddp_rank.{rank}.json", "w"
-                        ) as f:
-                            json.dump(result_dict, f)
-                        dist.barrier()
-                        all_val_loss = []
-                        for k in range(world_size):
-                            with open(
-                                    f"{hparams.log_dir}/result_dict.batch.{trainer.global_step}.ddp_rank.{k}.json", "r"
-                            ) as f:
-                                if trainer.val_dataset is not None:
-                                    all_val_loss.append(json.load(f)["val_loss"])
-                                else:
-                                    # train is val
-                                    all_val_loss.append(json.load(f)["train_loss"])
-                        print(f"Batch {trainer.global_step} all val loss: {np.mean(all_val_loss)}")
-                        trainer.scheduler_step(np.mean(all_val_loss))
-                        dist.barrier()
-                except StopIteration:
-                    train_finished = True
-            # if remain unupdated parameters, update them
-            if not trainer.updated:
-                trainer.optimizer_step(loss)
-            dist.barrier()
-            # validate every epoch
-            if trainer.val_dataset is not None:
-                val_finished = False
-                trainer.validation_epoch_begin()
-                while not val_finished:
-                    try:
-                        trainer.validation_step()
-                        dist.barrier()
-                    except StopIteration:
-                        val_finished = True
-            result_dict = trainer.validation_epoch_end()
-            print(f"Rank {rank} epoch {i} result: {result_dict}")
-            with open(f"{hparams.log_dir}/result_dict.epoch.{i}.ddp_rank.{rank}.json", "w") as f:
-                json.dump(result_dict, f)
-            # take all val loss together
-            dist.barrier()
-            trainer.training_epoch_end()
-            epoch_end_time = time.time()
-            print(f"Epoch {i} time: ", epoch_end_time - epoch_start_time)
-            dist.barrier()
-            if rank == 0 and trainer.current_epoch % save_every_epoch == 0:
-                trainer.write_model(epoch=trainer.current_epoch)
-    cleanup()
-    # return all_losses
-    return trainer
 
 
 def data_distributed_parallel_gpu(rank, model, hparams, dataset_att, dataset_extra_args, trainer_fn=None, checkpoint_epoch=None):

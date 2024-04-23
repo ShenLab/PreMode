@@ -1,1 +1,1 @@
-Rscript fig.5.prepare.R PreMode.inference/,PreMode.noMSA.inference/,PreMode.noPretrain/,PreMode.noStructure/,PreMode.onehot.inference/,PreMode.pass.inference/,PreMode.ptm/,PreMode.CHPs.v4.large.window/
+Rscript fig.5.prepare.R PreMode/,PreMode.noStructure/,PreMode.noESM/,PreMode.noMSA/,PreMode.ptm/,ESM.SLP/,PreMode.noPretrain/

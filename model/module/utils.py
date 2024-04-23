@@ -1,4 +1,3 @@
-import warnings
 from abc import ABC
 from typing import Optional
 
@@ -613,57 +612,6 @@ class RegressionWeightedLoss(nn.modules.loss._WeightedLoss):
 class GPLoss(nn.modules.loss._WeightedLoss):
     def __init__():
         super().__init__()
-
-
-def combined_loss_archive(input: torch.Tensor, target: torch.Tensor,
-                  weight: float=10.0, 
-                  weight_1: Optional[torch.Tensor]=None, 
-                  weight_2: Optional[torch.Tensor]=None,
-                  reduction: str = 'mean') -> torch.Tensor:
-    # my custom loss function, target should be -1, 0, 1, 3.
-    # -1 represents LoF
-    # 0 represents neutral
-    # 1 represents GoF
-    # 3 represents pathogenic, but unknown LoF or GoF
-    # input should be the output of the model, which is a 2D tensor with shape [batch_size, 3]
-    # the first column is the probability of neutral,
-    # the second column is the probability of neutral, 
-    # the third column is the probability of GoF
-    # reshape target to 1D tensor
-    if target.ndim == 2:
-        target = target.squeeze(1)
-    # first, we transfer the target to 0, 1
-    target_1 = (-1/3 * target**3 + target**2 + 1/3 * target).long()
-    # then, we transfer the target to 0, 1, 2
-    target_2 = (3/2 * target ** 2 + 1/2 * target).long()
-    # then we normalize the input with LogSoftmax
-    input = F.log_softmax(input, dim=1)
-    # loss_1 is the cross entropy loss on pathogenic / neutral
-    # use a kernel to sum the last two columns of input
-    kernel = torch.tensor([[1, 0], [0, 1], [0, 1]], dtype=input.dtype, device=input.device)
-    loss_1 = nll_loss(input=torch.log(torch.matmul(torch.exp(input), kernel)),
-                      target=target_1,
-                      weight=weight_1,
-                      reduction=reduction)
-    # loss_2 is the cross entropy loss on pathogenic / neutral / GoF
-    # only do the calculation if target equals -1 or 1
-    filter = (target == -1) | (target == 1)
-    # if filter is all False, then loss_2 is 0
-    if not filter.any():
-        return loss_1
-    else:
-        filter = (target == -1) | (target == 1) | (target == 0)
-    loss_2 = nll_loss(input=input[filter],
-                      target=target_2[filter],
-                      weight=weight_2,
-                      reduction=reduction)
-    # assume LoF / GoF task is more important, so we add a weight of 10 to loss_2
-    # if no benign variants, ignore loss_1
-    if not (target == 0).any():
-        loss = loss_2
-    else:
-        loss = loss_1 + weight * loss_2
-    return loss
 
 
 def combined_loss(input: torch.Tensor, target: torch.Tensor,

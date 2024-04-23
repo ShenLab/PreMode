@@ -10,7 +10,7 @@ all.premode <- list(c(), c(), c(), c(), c(), c(), c(), c())
 all.baseline <- list(c(), c(), c(), c(), c(), c(), c(), c())
 all.replicates <- list()
 for (r in 1:8) {
-  replicate <- read.csv(paste0('PreMode.inference/PTEN/replicate.', r, '.csv'))
+  replicate <- read.csv(paste0('PreMode/PTEN/replicate.', r, '.csv'))
   training <- read.csv(paste0('../data.files/PTEN.replicate.rest.', 
                               r, '/training.csv'), row.names = 1)
   # ground.truth$aaChg <- paste0('p.', ground.truth$ref, ground.truth$pos.orig, ground.truth$alt)

@@ -66,6 +66,7 @@ num_steps_update: 8 # important, how many steps before updating the model, use l
 lr_warmup_steps: 4000 # important
 batch_size: 8
 ngpus: 1
+use_lora: 
 num_epochs: 20
 loss_fn: mse_loss
 data_split_fn: _by_anno
@@ -80,7 +81,7 @@ val_size: 0.05
 ## log specific
 num_save_epochs: 1
 num_save_batches: 2000 # save every 1000 batches, this also control the validation frequency
-log_dir: ./PreMode.results/PreMode.seed.0/TL.fluorescence.subset.1.seed.3/
+log_dir: ./PreMode.results/PreMode/TL.fluorescence.subset.1.seed.3/
 
 loaded_confidence: true
 loaded_esm: true

@@ -1,37 +1,82 @@
-ALL <- read.csv('figs/ALL.csv', row.names = 1, na.strings = c("NA", "."))
-ALL$score[ALL$score==0] <- -1
 library(ggplot2)
-# get distribution of scn2a and fgfr2
-good.genes <- c("P15056", "P04637", "Q09428", "Q14654", "O00555")
-bad.genes <- c('Q99250', 'P21802', "P07949", "Q14524")
-ALL$plot.label <- ALL$uniprotID
-ALL$plot.label[!ALL$uniprotID %in% c(good.genes, bad.genes)] <- NA
-ALL$plot.label[ALL$uniprotID %in% c(bad.genes)] <- 'Bad Genes'
-ALL$plot.label[ALL$uniprotID %in% c(good.genes)] <- 'Good Genes'
-ALL$score.label <- ALL$score
-ALL$score.label[ALL$score == -1] <- 'LoF'
-ALL$score.label[ALL$score == 1] <- 'GoF'
-wil.stat <- wilcox.test(ALL$pLDDT[!is.na(ALL$plot.label) & ALL$plot.label=='Good Genes' & ALL$score==-1],
-                        ALL$pLDDT[!is.na(ALL$plot.label) & ALL$plot.label=='Good Genes' & ALL$score==1])
-p1 <- ggplot(ALL[!is.na(ALL$plot.label) & ALL$plot.label=='Good Genes',],
-             aes(x=pLDDT, col=score.label)) + geom_density() + 
-  ggpp::geom_text_npc(data=data.frame(x="left", y="middle",
-                            label=paste0("Mann-Whitney test p=", signif(wil.stat$p.value, digits = 2))),
-            aes(npcx=x, npcy=y, label=label),
-            col='black') + 
-  theme_bw() + xlim(0, 100) +
-  ggtitle('Structure increase prediction: site pLDDT') + ggeasy::easy_center_title()
-wil.stat <- wilcox.test(ALL$pLDDT[!is.na(ALL$plot.label) & ALL$plot.label=='Bad Genes' & ALL$score==-1],
-                        ALL$pLDDT[!is.na(ALL$plot.label) & ALL$plot.label=='Bad Genes' & ALL$score==1])
-p5 <- ggplot(ALL[!is.na(ALL$plot.label) & ALL$plot.label=='Bad Genes',],
-             aes(x=pLDDT, col=score.label)) + geom_density() + 
-  ggpp::geom_text_npc(data=data.frame(x="left", y="middle",
-                                      label=paste0("Mann-Whitney test p=", signif(wil.stat$p.value, digits = 2))),
-                      aes(npcx=x, npcy=y, label=label),
-                      col='black') + 
-  theme_bw() + xlim(0, 100) +
-  ggtitle('Structure worsen prediction: site pLDDT') + ggeasy::easy_center_title()
+result.plot <- readRDS('figs/fig.5.prepare.RDS')
+result.plot$use.lw <- F
+# remove itan tasks
+result.plot <- result.plot[grepl('.itan.split', result.plot$task.id),]
+pick.cond <- 'auc'
+# get unique models
+uniq.models <- unique(gsub('.lw', '', result.plot$model))
+# only keep the original models
+uniq.models <- uniq.models[grepl('/$', uniq.models)]
+# get unique genes, remove Q14524
+uniq.genes <- unique(result.plot$task.id)
+uniq.genes <- uniq.genes[uniq.genes != "Q14524"]
+# for each gene and each fold, decide weather to use large window
+for (g in uniq.genes) {
+  for (m in uniq.models) {
+    for (f in 0:4) {
+      lw.loss <- result.plot$val.loss[result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f]
+      loss <- result.plot$val.loss[result.plot$model == m & result.plot$task.id == g & result.plot$fold==f]
+      lw.tr.auc <- result.plot$tr.auc[result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f]
+      tr.auc <- result.plot$tr.auc[result.plot$model == m & result.plot$task.id == g & result.plot$fold==f]
+      if (pick.cond == 'auc') {
+        cond <- !is.na(mean(lw.tr.auc)) & lw.tr.auc > tr.auc
+      } else if (pick.cond == 'loss') {
+        cond <- !is.na(mean(lw.loss)) & loss > lw.loss
+      } else if (pick.cond == 'auc+loss') {
+        cond <- !is.na(lw.loss) & !is.na(lw.tr.auc) & (lw.tr.auc/lw.loss > tr.auc/loss)
+      } else if (pick.cond == 'auc&loss') {
+        cond <- !is.na(lw.loss) & !is.na(lw.tr.auc) & (lw.tr.auc > tr.auc) & (loss > lw.loss)
+      } else if (pick.cond == 'lw') {
+        cond <- T
+      } else {
+        cond <- F
+      }
+      if (cond) {
+        # use lw
+        to.remove <- which(result.plot$model == m & result.plot$task.id == g & result.plot$fold==f)
+        to.anno <- which(result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f)
+        result.plot$model[to.anno] <- m
+        result.plot$use.lw[to.anno] <- T
+        result.plot <- result.plot[-to.remove,]
+      } else {
+        to.remove <- which(result.plot$model == paste0(m, '.lw') & result.plot$task.id == g & result.plot$fold==f)
+        result.plot <- result.plot[-to.remove,]
+      }
+    }
+  }
+}
 
-library(patchwork)
-p <- (p1 + p5) + plot_layout(ncol = 2)
-ggsave(filename = 'figs/fig.5c.pdf', p, width = 12, height = 2)
+
+result.plot <- result.plot[result.plot$model %in% c("PreMode/",
+                                                    "Itan.1"),]
+result.plot$task.name[result.plot$task.id == "Q14524.clean.itan.split"] <- "Gene: SCN5A"
+model.dic <- c("PreMode/"="1: PreMode",
+               "Itan.1"="2: LoGoFunc")
+result.plot$model <- model.dic[result.plot$model]
+num.models <- length(unique(result.plot$model))
+p1 <- ggplot(result.plot, aes(y=auc, x=task.name, col=model)) +
+  geom_point(alpha=0) + 
+  stat_summary(data = result.plot,
+               aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
+                   y = auc, col=model), 
+               fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  stat_summary(data = result.plot, 
+               aes(x=as.numeric(factor(task.name))+0.4*(as.numeric(factor(model)))/num.models-0.2*(num.models+1)/num.models,
+                   y = auc, col=model), 
+               fun.data = mean_se, geom = "point") +
+  labs(x = "task", y = "AUC", fill = "model") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle=60, vjust = 1, hjust = 1), 
+        text = element_text(size = 16),
+        plot.title = element_text(size=15),
+        legend.position="bottom", 
+        legend.direction="horizontal") +
+  ggtitle('PreMode compared to LoGoFunc') +
+  ggeasy::easy_center_title() +
+  coord_flip() + guides(col=guide_legend(nrow=1),
+                        shape=guide_legend(nrow=1)) +
+  ylim(0.25, 1) + xlab('task: Genetics Level Mode of Action') 
+ggsave(paste0('figs/fig.5c.pdf'), p1, height = 5, width = 6)
+
+

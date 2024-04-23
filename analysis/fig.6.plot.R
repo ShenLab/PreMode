@@ -2,21 +2,24 @@
 library(ggplot2)
 library(bio3d)
 library(patchwork)
-genes <- c("P15056", "P07949", "P04637", 
-           "Q14654")
-gene.names <- c("BRAF", "RET", "TP53", 
-                "KCNJ11")
+dssp.exec <- '/share/vault/Users/gz2294/miniconda3/bin/mkdssp'
+genes <- c("P15056", "P07949", "P04637", "Q14654")
+gene.names <- c("BRAF", "RET", "TP53","KCNJ11")
+use.lw.df <- readRDS('figs/fig.5a.plot.RDS')
+use.lw.df <- use.lw.df[use.lw.df$model == '1: PreMode',]
+
 af2.seqs <- read.csv('genes.full.seq.csv', row.names = 1)
 aa.dict <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
              'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
-log.dir <- '5genes.all.mut/inference.results/'
-auc.dir <- '../scripts/CHPs.v4.esm.dssp.small.StarAttn.MSA.StarPool.1dim/'
-use.logits <- 'meta.logits'
+log.dir <- '5genes.all.mut/PreMode/'
+auc.dir <- './'
+use.logits <- 'assemble.logits'
 folds <- c(-1, 0:4)
-source('~/Pipeline/plot.genes.scores.heatmap.R')
-source('~/Pipeline/AUROC.R')
+source('./AUROC.R')
 for (o in 1:length(genes)) {
   gene <- genes[o]
+  use.lw <- c(F, use.lw.df$use.lw[use.lw.df$task.id==gene])
+  names(use.lw) <- as.character(folds)
   prot_data <- drawProteins::get_features(gene)
   prot_data <- drawProteins::feature_to_dataframe(prot_data)
   secondary <- prot_data[prot_data$type %in% c("HELIX", "STRAND", "TURN"),]
@@ -28,12 +31,11 @@ for (o in 1:length(genes)) {
     secondary.df <- dplyr::bind_rows(secondary.df, sec.df)
   }
   #plot the AF2 predicted secondary.df and rsa
-  gene.af2.file <- paste0("../archive/af2.files/AF-",
+  gene.af2.file <- paste0("../data.files/af2.files/AF-",
                           gene, '-F', 1,
                           '-model_v4.pdb.gz')
-  # put your dssp here
   dssp.res <- dssp(read.pdb(gene.af2.file), 
-                   exefile='/share/vault/Users/gz2294/miniconda3/bin/mkdssp')
+                   exefile=dssp.exec)
   pdb.res <- read.pdb(gene.af2.file)
   plddt.res <- pdb.res$atom$b[pdb.res$calpha]
   af2.secondary <- rbind(cbind(as.data.frame(dssp.res$helix)[,1:4], type="HELIX"), 
@@ -101,44 +103,34 @@ for (o in 1:length(genes)) {
       testing.file <- read.csv(paste0('../data.files/ICC.seed.0/', gene, '/testing.csv'))[,c("HGNC", "pos.orig", "ref", "alt", "score", "data_source")]
       training.file$score[training.file$score!=0] <- 1
       testing.file$score[testing.file$score!=0] <- 1
-      all.logits <- matrix(NA, nrow = dim(gene.result)[1], ncol = 5)
-      colnames(all.logits) <- paste0('model.', 0:4)
+      all.logits <- matrix(NA, nrow = dim(gene.result)[1], ncol = 0)
+      all.mean.logits <- matrix(NA, nrow = dim(gene.result)[1], ncol = 5)
+      colnames(all.mean.logits) <- paste0('model.', 0:4)
     } else {
-      gene.result <- read.csv(paste0(log.dir, gene, '.fold.', fold, '.csv'), row.names = 1)
+      if (use.lw[as.character(fold)]) {
+        gene.result <- read.csv(paste0(log.dir, gene, '.large.window.fold.', fold, '.4fold.csv'), row.names = 1)
+      } else {
+        gene.result <- read.csv(paste0(log.dir, gene, '.fold.', fold, '.4fold.csv'), row.names = 1)
+      }
       training.file <- read.csv(paste0('../data.files/ICC.seed.', fold, '/', gene, '/training.csv'))[,c("HGNC", "pos.orig", "ref", "alt", "score", "data_source")]
       testing.file <- read.csv(paste0('../data.files/ICC.seed.', fold, '/', gene, '/testing.csv'))[,c("HGNC", "pos.orig", "ref", "alt", "score", "data_source")]
       training.file <- training.file[training.file$score %in% c(-1, 0, 1),]
       testing.file <- testing.file[testing.file$score %in% c(-1, 0, 1),]
-      auc.file <- read.csv(paste0('5genes.all.mut/ICC.5fold.csv'))
-      auc <- auc.file$min.val.auc[startsWith(auc.file$task, paste0(gene, ':')) & auc.file$fold==fold]
+      auc <- use.lw.df$tr.auc[use.lw.df$fold == fold & use.lw.df$task.id == gene]
       auc.weights <- c(auc.weights, auc)
-      all.logits[,fold+1] <- gene.result$logits
+      all.logits <- cbind(all.logits, gene.result[,paste0('logits.FOLD.', 0:3)])
+      all.mean.logits[,fold+1] <- rowMeans(gene.result[,paste0('logits.FOLD.', 0:3)])
     }
     if (!"logits" %in% colnames(gene.result) | fold != -1) {
       source('~/Pipeline/AUROC.R')
-      if ("logits.2" %in% colnames(gene.result)) {
-        logits <- gene.result[, c('logits.0', 'logits.1', 'logits.2')]
-        logits <- t(apply(as.matrix(logits), 1, soft.max))
-        gene.result$logits.0 <- logits[,1]
-        gene.result$logits.1 <- logits[,2]
-        gene.result$logits.2 <- logits[,3]
-      } else if ("logits.1" %in% colnames(gene.result)) {
-        logits.gof.lof <- gene.result$logits.1
-        logits.gof <- (1 - logits.gof.lof)
-        logits.lof <- logits.gof.lof
-        logits <- cbind(pretrain.result$logits, logits.lof, logits.gof)
-        gene.result$logits.0 <- pretrain.result$logits
-        gene.result$logits.1 <- logits.lof
-        gene.result$logits.2 <- logits.gof
-      } else {
-        logits.gof.lof <- gene.result$logits
-        logits.gof <- (1 - logits.gof.lof)
-        logits.lof <- logits.gof.lof
-        logits <- cbind(pretrain.result$logits, logits.lof, logits.gof)
-        gene.result$logits.0 <- pretrain.result$logits
-        gene.result$logits.1 <- logits.lof
-        gene.result$logits.2 <- logits.gof
-      }
+      logits.gof.lof <- rowMeans(gene.result[,paste0('logits.FOLD.', 0:3)])
+      logits.gof <- (1 - logits.gof.lof)
+      logits.lof <- logits.gof.lof
+      logits <- cbind(pretrain.result$logits, logits.lof, logits.gof)
+      gene.result$logits.0 <- pretrain.result$logits
+      gene.result$logits.1 <- logits.lof
+      gene.result$logits.2 <- logits.gof
+      # average logits
       assemble.logits <- assemble.logits + logits
       weighted.assemble.logits <- weighted.assemble.logits + logits * auc
       gene.result[,"logits.2/logits.1*logits.0"] <- (gene.result$logits.2 - gene.result$logits.1) * gene.result$logits.0
@@ -184,7 +176,6 @@ for (o in 1:length(genes)) {
       all.training <- dplyr::bind_rows(all.training, training.file, testing.file)
     } else {
       all.pretrain <- dplyr::bind_rows(training.file, testing.file)
-      # ggsave(paste0(log.dir, gene, '.pretrain.pdf'), p, width = 25, height = 4)
     }
   }
   assemble.logits <- assemble.logits / (length(folds) - 1)
@@ -192,7 +183,7 @@ for (o in 1:length(genes)) {
   # plot assemble.logits auc and weighted.assembl.logits auc
   all.training$unique.id <- paste0(gene, ":", all.training$ref, all.training$pos.orig, all.training$alt)
   all.training <- all.training[!duplicated(all.training$unique.id),]
-  all.training$assemble.logits <- assemble.logits[match(all.training$unique.id, gene.result$unique.id)]
+  all.training$assemble.logits <- rowMeans(all.logits[match(all.training$unique.id, gene.result$unique.id),])
   if (length(weighted.assemble.logits) != 0) {
     all.training$weighted.assemble.logits <- weighted.assemble.logits[match(all.training$unique.id, gene.result$unique.id)]
   }
@@ -201,14 +192,15 @@ for (o in 1:length(genes)) {
   train.score <- all.training$score[all.training$score%in%c(-1,1)] * 0.5 + 0.5
   table(as.factor(train.score))
   set.seed(0)
-  if (!file.exists(paste0(log.dir, gene, '.meta.RDS'))) {
-    meta_model_fit <- train(all.training.logits[all.training$score %in% c(-1,1),], 
-                            as.factor(train.score),
-                            method='ada')
-    saveRDS(meta_model_fit, file = paste0(log.dir, gene, '.meta.RDS'))
-  } else {
-    meta_model_fit <- readRDS(paste0(log.dir, gene, '.meta.RDS'))
+  unregister_dopar <- function() {
+    env <- foreach:::.foreachGlobals
+    rm(list=ls(name=env), pos=env)
   }
+  unregister_dopar()
+  # only fit model on pathogenic variants, remove benign
+  meta_model_fit <- train(all.training.logits[all.training$score %in% c(-1,1),], 
+                          as.factor(train.score))
+  saveRDS(meta_model_fit, file = paste0(log.dir, gene, '.meta.RDS'))
   meta.logits <- predict(meta_model_fit, all.logits, type = 'prob')[,2]
   all.training$meta.logits <- meta.logits[match(all.training$unique.id, gene.result$unique.id)]
   # add colnames
@@ -219,8 +211,9 @@ for (o in 1:length(genes)) {
   gene.result$meta.logits <- meta.logits
   gene.result$pretrain.logits <- pretrain.result$logits
   for (fold in 0:4) {
-    gene.result[,paste0('fold.', fold, '.logits')] <- all.logits[,fold+1]
+    gene.result[,paste0('fold.', fold, '.logits')] <- all.mean.logits[,fold+1]
   }
+  gene.result$all.logits <- all.logits
   if (use.logits=="assemble.logits") {
     assemble.auc <- plot.AUC(all.training$score[all.training$score %in% c(-1, 1)], 
                              all.training$assemble.logits[all.training$score %in% c(-1, 1)])
@@ -235,7 +228,7 @@ for (o in 1:length(genes)) {
     }
   } else if (use.logits=="meta.logits") {
     meta.auc <- plot.AUC(all.training$score[all.training$score %in% c(-1, 1)],
-                         all.training$meta.logits[all.training$score %in% c(-1, 1)])
+                         1-all.training$meta.logits[all.training$score %in% c(-1, 1)])
     print(meta.auc$auc)
     gene.result$logits <- NULL
     gene.result$logits.1 <- 1-meta.logits
@@ -262,6 +255,7 @@ for (o in 1:length(genes)) {
   }
   if (!"logits" %in% colnames(gene.result)) {
     gene.result[,"(logits.2-logits.1)*logits.0"] <- (gene.result$logits.2 - gene.result$logits.1) * gene.result$logits.0
+    write.csv(gene.result, paste0(log.dir, gene, '.logits.csv'))
     gene.result.to.plot <- gene.result
     all.training.to.plot <- all.training
     secondary.df.to.plot <- secondary.df
@@ -273,16 +267,19 @@ for (o in 1:length(genes)) {
     for (j in 1:4) {
       if (j == 1) {
         all.training.to.plot.plot <- all.pretrain
+        col.fill.limits <- c(0, 1)
       } else {
         all.training.to.plot.plot <- all.training.to.plot
+        col.fill.limits <- c(-1, 1)
       }
+      all.training.to.plot.plot$label <- all.training.to.plot.plot$score
       ps[[j]] <- ggplot() +
         geom_tile(data=gene.result, aes_string(x="pos.orig", y="alt", fill=col.to.plot[j])) + labs(fill=col.to.plot[j]) +
         scale_fill_gradientn(colors = c("light blue", "white", "pink"), na.value = 'grey') +
         scale_x_continuous(breaks=seq(0, nchar(gene.seq), 50), minor_breaks = seq(0, nchar(gene.seq), 10)) + labs(fill=fill.name[j]) +
         ggnewscale::new_scale_fill() +
-        geom_tile(data=all.training.to.plot.plot, aes(x=pos.orig, y=alt, fill=score, width=1, height=1)) +
-        scale_fill_gradientn(colors = c("blue", "white", "red")) +
+        geom_tile(data=all.training.to.plot.plot, aes(x=pos.orig, y=alt, fill=label, width=1, height=1)) +
+        scale_fill_gradientn(colors = c("blue", "white", "red"), limits=col.fill.limits) +
         ggnewscale::new_scale_fill() +
         geom_tile(data=secondary.df.to.plot, aes(x=pos.orig, y=alt, fill=ANNO_secondary, width=1, height=1)) +
         ggnewscale::new_scale_fill() +
@@ -298,8 +295,6 @@ for (o in 1:length(genes)) {
         theme_bw() + theme(legend.position="bottom") +
         ggtitle(gene.names[o]) + ggeasy::easy_center_title()
     }
-    p <- ps[[1]] + ps[[2]] + ps[[3]] + ps[[4]] + plot_layout(nrow=4)
-    # ggsave(paste0(log.dir, gene, '.pdf'), p, width = max(25, min(nchar(gene.seq)/70, 49.9)), height = 20)
     p <- ps[[1]] + ps[[4]] + plot_layout(nrow=2)
     ggsave(paste0(log.dir, gene, '.part.pdf'), p, width = max(25, min(nchar(gene.seq)/70, 49.9)), height = 10)
   } else {
@@ -314,13 +309,11 @@ for (o in 1:length(genes)) {
       theme_bw() + theme(legend.position="bottom") +
       scale_x_continuous(breaks=seq(0, nchar(gene.seq), 100)) +
       ggtitle(gene.names[o]) + ggeasy::easy_center_title()
-    # ggsave(paste0(log.dir, gene, '.pdf'), p, width = nchar(gene.seq)/50, height = 4)
   }
   p <- patch.plot[[1]] / patch.plot[[2]] / patch.plot[[3]] / patch.plot[[4]] / patch.plot[[5]]
-  # write.csv(gene.result, paste0(log.dir, gene, '.logits.csv'))
-  # ggsave(paste0(log.dir, gene, '.5folds.pdf'), p, width = max(25, min(nchar(gene.seq)/70*4, 49.9)), height = 4*5)
 }
-system('mv 5genes.all.mut/inference.results/P15056.part.pdf figs/fig.6a.pdf')
-system('mv 5genes.all.mut/inference.results/P04637.part.pdf figs/fig.sup.12a.pdf')
-system('mv 5genes.all.mut/inference.results/P07949.part.pdf figs/fig.sup.12b.pdf')
-system('mv 5genes.all.mut/inference.results/Q14654.part.pdf figs/fig.sup.12c.pdf')
+
+system('mv 5genes.all.mut/PreMode/P15056.part.pdf figs/fig.6a.pdf')
+system('mv 5genes.all.mut/PreMode/P04637.part.pdf figs/fig.sup.10a.pdf')
+system('mv 5genes.all.mut/PreMode/P07949.part.pdf figs/fig.sup.10b.pdf')
+system('mv 5genes.all.mut/PreMode/Q14654.part.pdf figs/fig.sup.10c.pdf')

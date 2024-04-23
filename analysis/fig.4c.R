@@ -1,4 +1,5 @@
 library(ggplot2)
+py.path = '/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/bin/python'
 task.dic <- list("PTEN"=c("score.1"="stability", "score.2"="enzyme.activity"), 
                  "NUDT15"=c("score.1"="stability", "score.2"="enzyme.activity"), 
                  "CCR5"=c("score.1"="stability", "score.2"="binding Ab2D7", "score.3"="binding HIV-1"), 
@@ -23,7 +24,7 @@ alphabet <- c('<cls>', '<pad>', '<eos>', '<unk>',
 # get test results
 result <- data.frame()
 for (i in 1:length(genes)) {
-  test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/test.fold.0.annotated.csv'))
+  test.result <- read.csv(paste0('PreMode/', genes[i], '/test.fold.0.annotated.csv'))
   anno.all <- read.csv(paste0('../data.files/', genes[i], '/ALL.annotated.csv'))
   anno.all <- prepare.unique.id(anno.all)
   task.length <- length(task.dic[[genes[i]]])
@@ -31,7 +32,7 @@ for (i in 1:length(genes)) {
     for (fold in 0:4) {
       # REVEL, PrimateAI, ESM AUC
       if (subset == 8) {
-        test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
+        test.result <- read.csv(paste0('PreMode/', genes[i], '/',
                                        '/testing.fold.', fold, '.csv'))
         gene.train <- read.csv(paste0('../data.files/', genes[i], '/',
                                       '/train.seed.', fold, '.csv'))
@@ -39,7 +40,7 @@ for (i in 1:length(genes)) {
         train.config <- yaml::read_yaml(paste0('../scripts/PreMode/',
                                                genes[i], '.5fold/', genes[i], '.fold.', fold, '.yaml'))
         # get train val split
-        baseline.result.2 <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
+        baseline.result.2 <- read.csv(paste0('ESM.SLP/', genes[i], '/',
                                              '/testing.fold.', fold, '.csv'))
         # add hsu et al results
         hsu.unirep_onehot.auc <- list(R2=c())
@@ -55,13 +56,13 @@ for (i in 1:length(genes)) {
           hsu.eve_onehot.auc$R2 <- c(hsu.eve_onehot.auc$R2, test.result.hsu$spearman[match('vae+onehot', test.result.hsu$predictor)])
         }
       } else {
-        test.result <- read.csv(paste0('PreMode.inference/', genes[i], '/',
+        test.result <- read.csv(paste0('PreMode/', genes[i], '/',
                                        '/testing.subset.', subset, '.fold.', fold, '.csv'))
         gene.train <- read.csv(paste0('../data.files/', genes[i], '/',
                                       '/training.', subset, '.', fold, '.csv'))
         train.config <- yaml::read_yaml(paste0('../scripts/PreMode/',
                                                genes[i], '.subsets/subset.', subset, '/seed.', fold, '.yaml'))
-        baseline.result.2 <- read.csv(paste0('PreMode.pass.inference/', genes[i], '/',
+        baseline.result.2 <- read.csv(paste0('ESM.SLP/', genes[i], '/',
                                              '/testing.subset.', subset, '.fold.', fold, '.csv'))
         # add hsu et al results
         hsu.unirep_onehot.auc <- list(R2=c())
@@ -101,8 +102,8 @@ for (i in 1:length(genes)) {
       write.csv(test.result, file = test.label.file)
       write.csv(prepare.biochemical(gene.train), file = train.biochem.file)
       write.csv(prepare.biochemical(test.result), file = test.biochem.file)
-      res <- system(paste0('/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/bin/python ', 
-                           '10.analysis.few.shot.elastic.net.dms.py ', 
+      res <- system(paste0(py.path, ' ', 
+                           'elastic.net.dms.py ', 
                            train.biochem.file, ' ',
                            train.label.file, ' ',
                            test.biochem.file, ' ', 
@@ -119,7 +120,7 @@ for (i in 1:length(genes)) {
       task.name = paste0(genes[i], ":", rep(task.dic[[genes[i]]], 7)))
       to.append$model <- rep(c("PreMode",
                                "Elastic Net",
-                               "ESM + SLR",
+                               "ESM+SLP",
                                "Augmented ESM1b",
                                "Augmented EVmutation",
                                "Augmented Unirep",
@@ -215,11 +216,7 @@ for (i in 1:dim(uniq.model.result.plot)[1]) {
   }
   uniq.model.result.plot$rho[i] <- sum(rhos * data.points, na.rm = T) / sum(data.points)
   uniq.model.result.plot$rho.sd[i] <- sum(rho.sds * data.points, na.rm = T) / sum(data.points)
-  # uniq.model.result.plot$rho[i] <- mean(rhos, na.rm = T)
-  # uniq.model.result.plot$rho.sd[i] <- mean(rho.sds, na.rm = T)
 }
-# uniq.model.result.plot$model[uniq.model.result.plot$model == "PreMode"] <- "PreMode (148k)"
-uniq.model.result.plot$model[uniq.model.result.plot$model == "ESM + SLR"] <- "ESM2 emb + SLP"
 p <- ggplot(uniq.model.result.plot, aes(x=subset, y=rho, col=model)) +
   geom_point() +
   geom_errorbar(aes(ymin=rho-rho.sd, ymax=rho+rho.sd), width=.2) +
