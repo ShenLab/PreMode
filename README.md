@@ -10,36 +10,19 @@ Unfortunately we are not allowed to share the HGMD data, so in the `data.files/p
 
 We shared the trained weights of our models trained using HGMD instead. 
 
-# Run
-Please install the necessary packages using `mamba env create -f PreMode.yaml`
+# Install Packages
+Please install the necessary packages using 
+```
+mamba env create -f PreMode.yaml
+mamba env create -f r4-base.yaml
+```
 
-Then, inside the PreMode conda environment, run `python train.py --conf CONFIG.yaml`, where `CONFIG.yaml` is a config file stored in `scripts/` folder.
-
-Here is the list of models in our manuscript:
-
-`scripts/PreMode/` PreMode, it takes 250 GB RAM and 4 A40 Nvidia GPUs to run, will finish in ~50h.
-
-`scripts/ESM.LR/` Baseline Model, ESM2 (650M) + Single Layer Perceptron
-
-`scripts/PreMode.large.window/` PreMode, window size set to 1251 AA.
-
-`scripts/PreMode.noESM/`  PreMode, replace the ESM2 embeddings to one hot encodings of 20 AA.
-
-`scripts/PreMode.noMSA/`  PreMode, remove the MSA input.
-
-`scripts/PreMode.noPretrain/` PreMode, but didn't pretrain on ClinVar/HGMD.
-
-`scripts/PreMode.noStructure/` PreMode, remove the AF2 predicted structure input.
-
-`scripts/PreMode.ptm/` PreMode, add the onehot encoding of post transcriptional modification sites as input.
-
-`scripts/PreMode.mean.var/` PreMode, it will output both predicted value (mean) and confidence (var), used in adaptive learning tasks.
-
-# Figures in our manuscript
-
-Please install the necessary R packages using `mamba env create -f r4-base.yaml`
-
-Please go to `analysis/` folder and run the corresponding R scripts.
+You can check the installation by running
+```
+conda activate PreMode
+python train.py --conf scripts/TEST.yaml --mode train
+```
+If no error occurs, it means successful installation.
 
 # New Experiment 
 ## Start from scratch and use our G/LoF datasets
@@ -97,7 +80,11 @@ Please go to `analysis/` folder and run the corresponding R scripts.
       + `wt.orig`: the wild type protein sequence, in the uniprot format.
       + `sequence.len.orig`: the wild type protein sequence length.
 
-    + If you prepared your input in Format 1, please run `bash parse.input.table/parse.input.table.sh YOUR_FILE TRANSFORMED_FILE` to transform it to Format 2, note it will drop some lines if your aaChg doesn't match the corresponding alphafold sequence.
+    + If you prepared your input in Format 1, please run 
+        ```
+        bash parse.input.table/parse.input.table.sh YOUR_FILE TRANSFORMED_FILE
+        ``` 
+      to transform it to Format 2, note it will drop some lines if your aaChg doesn't match the corresponding alphafold sequence.
 2.  Prepare a config file for training the model and inference. 
     ```
     bash scripts/prepare.new.task.yaml.sh PRETRAIN_MODEL_NAME YOUR_TASK_NAME YOUR_TRAINING_FILE YOUR_INFERENCE_FILE TASK_TYPE MODE_OF_ACTION_N
@@ -106,7 +93,7 @@ Please go to `analysis/` folder and run the corresponding R scripts.
       + `scripts/PreMode`: Default PreMode
       + `scripts/PreMode.ptm`: PreMode + ptm as input
       + `scripts/PreMode.noStructure`: PreMode without structure input
-      + `scripts/PreMode.noESM`: PreMode without ESM input
+      + `scripts/PreMode.noESM`: PreMode, replaced ESM2 input with one-hot encodings of 20 AAs.
       + `scripts/PreMode.noMSA`: PreMode without MSA input
       + `scripts/ESM.SLP`: ESM embedding + Single Layer Perceptron
     + `YOUR_TASK_NAME` can be anything on your preference
@@ -125,3 +112,28 @@ Please go to `analysis/` folder and run the corresponding R scripts.
 4.  You'll get a file in the `OUTPUT_FOLDER` named as `YOUR_TASK_NAME.inference.result.csv`. 
     + If your `TASK_TYPE` is `GLOF`, then the column `logits` will be the inference results. Closer to 0 means GoF, closer to 1 means LoF.
     + If your `TASK_TYPE` is `DMS` and `MODE_OF_ACTION_N` is 1, then the column `logits` will be the inference results. If your `MODE_OF_ACTION_N` is larger than 1, then you will get multiple columns of `logits.*`, each represent a predicted DMS measurement.
+
+
+# Models & Figures in our manuscript
+## Pretrained Models
+Here is the list of models in our manuscript:
+
+`scripts/PreMode/` PreMode, it takes 250 GB RAM and 4 A40 Nvidia GPUs to run, will finish in ~50h.
+
+`scripts/ESM.LR/` Baseline Model, ESM2 (650M) + Single Layer Perceptron
+
+`scripts/PreMode.large.window/` PreMode, window size set to 1251 AA.
+
+`scripts/PreMode.noESM/`  PreMode, replace the ESM2 embeddings to one hot encodings of 20 AA.
+
+`scripts/PreMode.noMSA/`  PreMode, remove the MSA input.
+
+`scripts/PreMode.noPretrain/` PreMode, but didn't pretrain on ClinVar/HGMD.
+
+`scripts/PreMode.noStructure/` PreMode, remove the AF2 predicted structure input.
+
+`scripts/PreMode.ptm/` PreMode, add the onehot encoding of post transcriptional modification sites as input.
+
+`scripts/PreMode.mean.var/` PreMode, it will output both predicted value (mean) and confidence (var), used in adaptive learning tasks.
+## Figures 
+Please go to `analysis/` folder and run the corresponding R scripts.
