@@ -3,7 +3,7 @@
 # pretrain.seed.0.yaml: main file, the pretrain model
 # first select the best model for TL based on validation dataset in pretrain
 if [ ! -f $1/pretrain.seed.0.summary ] || [ ! -s $1/pretrain.seed.0.summary ]; then
-  Rscript plot.test.AUC.by.step.R $1/pretrain.seed.0.yaml > $1/pretrain.seed.0.summary
+  Rscript visualize.train.process/plot.test.AUC.by.step.R $1/pretrain.seed.0.yaml > $1/pretrain.seed.0.summary
 fi
 number=$(cat $1/pretrain.seed.0.summary | grep 'val' | grep -oE '\([0-9]+\)' | sed 's/[(|)]//g')
 logdir=$(cat $1/pretrain.seed.0.yaml | grep log_dir | sed 's/.*: //')

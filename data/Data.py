@@ -143,7 +143,6 @@ class GraphMutationDataset(Dataset):
         self._set_node_embeddings()
         self._set_edge_embeddings()
         self.unmatched_msa = 0
-        # TODO: consider load language model embeddings to RAM
         # shuffle the data
         if shuffle:
             np.random.seed(0)
@@ -185,9 +184,8 @@ class GraphMutationDataset(Dataset):
                                                                  self.data['ref'],
                                                                  self.data['alt'], 
                                                                  cycle([self.max_len]),
-                                                                 self.data['af2_file'],))
+                                                                 self.data['af2_file'] if 'af2_file' in self.data.columns else cycle([None]),))
         # drop the data that does not have coordinates if we are using af2
-        # if self.graph_type == 'af2':
         print(f"drop {np.sum(~np.array(point_mutations, dtype=bool))} mutations that don't have coordinates")
         self.data = self.data.loc[np.array(point_mutations, dtype=bool)]
         self.mutations = list(filter(bool, point_mutations))
