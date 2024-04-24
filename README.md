@@ -6,7 +6,7 @@ Please use the git lfs to download all files in `data.files/` folder
 
 Unzip the files with this script: `bash unzip.files.sh`
 
-Unfortunately we are not allowed to share the HGMD data, so in the `data.files/pretrain/training.*` files we removed all the pathogenic variants from HGMD (49218 in total). This might affect the plots of `analysis/figs/fig.sup.14.pdf` and `analysis/figs/fig.sup.15.pdf` if you re-run the R codes in `analysis/` folder.
+Unfortunately we are not allowed to share the HGMD data, so in the `data.files/pretrain/training.*` files we removed all the pathogenic variants from HGMD (49218 in total). This might affect the plots of `analysis/figs/fig.sup.12.pdf` and `analysis/figs/fig.sup.13.pdf` if you re-run the R codes in `analysis/` folder.
 
 We shared the trained weights of our models trained using HGMD instead. 
 
@@ -99,7 +99,8 @@ Please go to `analysis/` folder and run the corresponding R scripts.
     conda activate PreMode
     bash scripts/run.new.task.sh PRETRAIN_MODEL_NAME YOUR_TASK_NAME OUTPUT_FOLDER GPU_ID 
     ```
+    This should take ~30min on a NVIDIA A40 GPU depending on your data set size.
 
 4.  You'll get a file in the `OUTPUT_FOLDER` named as `YOUR_TASK_NAME.inference.result.csv`. 
-  + If your `TASK_TYPE` is `GLOF`, then the column `logits` will be the inference results. Closer to 0 means GoF, Closer to 1 means LoF.
+  + If your `TASK_TYPE` is `GLOF`, then the column `logits` will be the inference results. Closer to 0 means GoF, closer to 1 means LoF.
   + If your `TASK_TYPE` is `DMS` and `MODE_OF_ACTION_N` is 1, then the column `logits` will be the inference results. If your `MODE_OF_ACTION_N` is larger than 1, then you will get multiple columns of `logits.*`, each represent a predicted DMS measurement.

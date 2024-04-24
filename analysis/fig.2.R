@@ -1,6 +1,7 @@
 library(ggplot2)
 # moved annotated file here, previously we annotate from scratch.
-ALL <- read.csv('figs/fig.2.annotated.csv', row.names = 1, na.strings = c(".", "NA"))
+ALL <- read.csv('figs/ALL.csv', row.names = 1, na.strings = c(".", "NA"))
+ALL <- ALL[ALL$data_source != 'glazer',]
 # compare conservation with benign
 benign <- read.csv('figs/benign.csv', row.names = 1, na.strings = c(".", "NA"))
 benign <- benign[benign$uniprotID %in% ALL$uniprotID,]
@@ -9,7 +10,7 @@ gene.df <- data.frame(uniprotID=unique(ALL$uniprotID),
                       GoF=NA, LoF=NA)
 for (i in 1:dim(gene.df)[1]) {
   gene.df$GoF[i] <- sum(ALL$score[ALL$uniprotID==gene.df$uniprotID[i]]==1)
-  gene.df$LoF[i] <- sum(ALL$score[ALL$uniprotID==gene.df$uniprotID[i]]==0)
+  gene.df$LoF[i] <- sum(ALL$score[ALL$uniprotID==gene.df$uniprotID[i]]==-1)
 }
 gene.df$label <- NA
 genes.dic <- c("Q09428"="ABCC8", "P15056"="BRAF", "O00555"="CACNA1A", "P21802"="FGFR2",
@@ -25,11 +26,12 @@ ggsave('figs/fig.2c.pdf', height = 3.5, width = 5)
 
 
 p <- list()
+ion.genes <- unique(ALL$uniprotID[grepl("Heyne", ALL$data_source)])
 for (j in c(0, 1, 2)) {
   if (j==0) {
-    sse <- table(ALL$secondary_struc[ALL$data_source!="Heyne"], ALL$LABEL[ALL$data_source!="Heyne"])
+    sse <- table(ALL$secondary_struc[!ALL$uniprotID %in% ion.genes], ALL$LABEL[!ALL$uniprotID %in% ion.genes])
   } else if (j==1) {
-    sse <- table(ALL$secondary_struc[ALL$data_source=="Heyne"], ALL$LABEL[ALL$data_source=="Heyne"])
+    sse <- table(ALL$secondary_struc[ALL$uniprotID %in% ion.genes], ALL$LABEL[ALL$uniprotID %in% ion.genes])
   } else {
     sse <- table(ALL$secondary_struc, ALL$LABEL)
   }
