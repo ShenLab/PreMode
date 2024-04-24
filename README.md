@@ -2,9 +2,11 @@
 This is the repository for our manuscript "PreMode predicts mode-of-action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv: https://www.biorxiv.org/content/10.1101/2024.02.20.581321v2
 
 # Data
-Please use the git lfs to download all files in `data.files/` folder
+Unfortunately the `data.files/af2.files/`, `data.files/esm.files/`, `data.files/esm.MSA/`, `data.files/gMVP.MSA/` folders are too large to upload to git lfs. We provided those files in huggingface: https://huggingface.co/gzhong/PreMode
 
-Unzip the files with this script: 
+You can either clone this repository or the huggingface repository.
+
+Then, unzip the files with this script: 
 ```
 bash unzip.files.sh
 ```
