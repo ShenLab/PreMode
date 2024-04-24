@@ -4,7 +4,10 @@ This is the repository for our manuscript "PreMode predicts mode-of-action of mi
 # Data
 Please use the git lfs to download all files in `data.files/` folder
 
-Unzip the files with this script: `bash unzip.files.sh`
+Unzip the files with this script: 
+```
+bash unzip.files.sh
+```
 
 Unfortunately we are not allowed to share the HGMD data, so in the `data.files/pretrain/training.*` files we removed all the pathogenic variants from HGMD (49218 in total). This might affect the plots of `analysis/figs/fig.sup.12.pdf` and `analysis/figs/fig.sup.13.pdf` if you re-run the R codes in `analysis/` folder.
 
@@ -120,7 +123,7 @@ Here is the list of models in our manuscript:
 
 `scripts/PreMode/` PreMode, it takes 250 GB RAM and 4 A40 Nvidia GPUs to run, will finish in ~50h.
 
-`scripts/ESM.LR/` Baseline Model, ESM2 (650M) + Single Layer Perceptron
+`scripts/ESM.SLR/` Baseline Model, ESM2 (650M) + Single Layer Perceptron
 
 `scripts/PreMode.large.window/` PreMode, window size set to 1251 AA.
 
@@ -135,5 +138,22 @@ Here is the list of models in our manuscript:
 `scripts/PreMode.ptm/` PreMode, add the onehot encoding of post transcriptional modification sites as input.
 
 `scripts/PreMode.mean.var/` PreMode, it will output both predicted value (mean) and confidence (var), used in adaptive learning tasks.
+
+## Predicted mode-of-action
+| gene | file | 
+| :-: | :-: |
+| BRAF | `analysis/5genes.all.mut/PreMode/P15056.logits.csv` |
+| RET | `analysis/5genes.all.mut/PreMode/P07949.logits.csv` |
+| TP53 | `analysis/5genes.all.mut/PreMode/P04637.logits.csv` |
+| KCNJ11 | `analysis/5genes.all.mut/PreMode/Q14654.logits.csv` |
+| CACNA1A | `analysis/5genes.all.mut/PreMode/O00555.logits.csv` |
+| SCN5A | `analysis/5genes.all.mut/PreMode/Q14524.logits.csv` |
+| SCN2A | `analysis/5genes.all.mut/PreMode/Q99250.logits.csv` |
+| ABCC8 | `analysis/5genes.all.mut/PreMode/Q09428.logits.csv` |
+| PTEN | `analysis/5genes.all.mut/PreMode/P60484.logits.csv` |
+
+For each file, column `logits.0` is predicted pathogenicity. column `logits.1` is predicted LoF probability, `logits.2` is predicted GoF probability.
+For PTEN, column `logits.1` is predicted stability, 0 is loss, 1 is neutral, `logits.2` is predicted enzyme activity, 0 is loss, 1 is neutral
+
 ## Figures 
 Please go to `analysis/` folder and run the corresponding R scripts.
