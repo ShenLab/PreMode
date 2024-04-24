@@ -41,7 +41,8 @@ Please install the necessary R packages using `mamba env create -f r4-base.yaml`
 
 Please go to `analysis/` folder and run the corresponding R scripts.
 
-# New Experiment (Start from scratch and use our G/LoF datasets)
+# New Experiment 
+## Start from scratch and use our G/LoF datasets
 1. Please prepare a folder under `scripts/` and create a file named `pretrain.seed.0.yaml` inside the folder, check `scripts/PreMode/pretrain.seed.0.yaml` for example. 
 2. Run pretrain in pathogenicity task: `python train.py --conf scripts/NEW_FOLDER/pretrain.seed.0.yaml`
 3. Prepare transfer learning config files: `bash scripts/DMS.prepare.yaml.sh scripts/NEW_FOLDER/`
@@ -50,7 +51,7 @@ Please go to `analysis/` folder and run the corresponding R scripts.
 5. Save inference results: `bash scripts/DMS.5fold.inference.sh scripts/NEW_FOLDER analysis/NEW_FOLDER TASK_NAME GPU_ID`
 6. You'll get a folder `analysis/NEW_FOLDER/TASK_NAME` with 5 `.csv` files, each file has 4 columns `logits.FOLD.[0-3]`. Each column represent the G/LoF prediction at one cross-validation (closer to 0 means more likely GoF, closer to 1 means more likely LoF). We suggest averaging the predictions at 4 columns. 
 
-# New Experiment (Only transfer learning, user defined mode-of-action datasets)
+## Only transfer learning, user defined mode-of-action datasets
 1.  Prepare a `.csv` file for training and inference, there are two accepted formats: 
 + Format 1 (only for missense variants):
     | uniprotID | aaChg  | score | ENST |
