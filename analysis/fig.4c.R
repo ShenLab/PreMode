@@ -182,11 +182,11 @@ for (i in 1:length(task.dic)) {
       ggtitle(paste0(task, ":", model)) + ggeasy::easy_center_title() + xlab("training data size (%)")
     task.plots[[k]] <- p
   }
-  plots[[i]] <- task.plots[[1]] + task.plots[[2]] + task.plots[[3]] + task.plots[[4]] + task.plots[[5]] + task.plots[[6]] + task.plots[[7]] + plot_layout(ncol = 7)
+  plots[[i]] <- ggpubr::ggarrange(plotlist = task.plots, ncol = length(num.models), common.legend = T, legend = "bottom")
 }
 library(patchwork)
 p <- plots[[1]] / plots[[2]] / plots[[3]] / plots[[4]] / plots[[5]] / plots[[6]] / plots[[7]] / plots[[8]] 
-ggsave(p, filename = paste0("figs/fig.sup.4.pdf"), width = 35, height = 28)
+ggsave(p, filename = paste0("figs/fig.sup.4.pdf"), width = 20, height = 28)
 
 # aggregate across models
 uniq.model.result.plot <- uniq.result.plot[!duplicated(uniq.result.plot[,c('model', "subset")]),]
