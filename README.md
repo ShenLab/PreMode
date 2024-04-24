@@ -82,7 +82,7 @@ Please go to `analysis/` folder and run the corresponding R scripts.
     bash scripts/prepare.new.task.yaml.sh PRETRAIN_MODEL_NAME YOUR_TASK_NAME YOUR_TRAINING_FILE YOUR_INFERENCE_FILE TASK_TYPE MODE_OF_ACTION_N
     ```
   + `PRETRAIN_MODEL_NAME` could be one of the following:
-    + `scripts/PreMode/`: Default PreMode
+    + `scripts/PreMode`: Default PreMode
     + `scripts/PreMode.ptm`: PreMode + ptm as input
     + `scripts/PreMode.noStructure`: PreMode without structure input
     + `scripts/PreMode.noESM`: PreMode without ESM input
@@ -96,6 +96,7 @@ Please go to `analysis/` folder and run the corresponding R scripts.
   
 3.  Run your config file
     ```
+    conda activate PreMode
     bash scripts/run.new.task.sh PRETRAIN_MODEL_NAME YOUR_TASK_NAME OUTPUT_FOLDER GPU_ID 
     ```
 

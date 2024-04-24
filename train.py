@@ -60,8 +60,6 @@ def get_args():
                         help='Whether to use CB as distance or not')
     parser.add_argument('--add-msa', type=bool, default=False,
                         help='Whether to add msa to features or not')
-    parser.add_argument('--zero-msa', type=bool, default=False,
-                        help='Whether to zero msa features or not')
     parser.add_argument('--add-msa-contacts', type=bool, default=True,
                         help='Whether to add msa contacts to features or not')
     parser.add_argument('--add-confidence', type=bool, default=False,
@@ -98,10 +96,6 @@ def get_args():
                         help='Whether to transfer scer, if so, the score will be transfered to 0, 3')
     parser.add_argument('--use-lmdb', type=bool, default=False,
                         help='Whether to use preloaded lmdb')
-    parser.add_argument('--add-nma', type=bool, default=False,
-                        help='Whether to use Normal Mode Analysis')
-    parser.add_argument('--loaded-nma', type=bool, default=False,
-                        help='Whether to load Normal Mode Analysis')
     
     # model specific
     parser.add_argument('--load-model', type=str, default=None,
@@ -313,7 +307,6 @@ def main(args, continue_train=False, four_fold=False):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
-                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -330,19 +323,11 @@ def main(args, continue_train=False, four_fold=False):
                    "computed_graph": args.computed_graph,
                    "neighbor_type": args.neighbor_type,
                    "max_len": args.max_len,
-                   "use_lmdb": args.use_lmdb,
-                   "add_nma": args.add_nma,
-                   "loaded_nma": args.loaded_nma}
+                   "use_lmdb": args.use_lmdb,}
     if "Onesite" in args.dataset:
         dataset_att['convert_to_onesite'] = args.convert_to_onesite
-    if args.trainer_fn == "PreMode_trainer_noGraph":
-        trainer_fn = PreMode_trainer_noGraph
-        dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "PreMode_trainer":
+    if args.trainer_fn == "PreMode_trainer":
         trainer_fn = PreMode_trainer
-        dataset_extra_args = {}
-    elif args.trainer_fn == "PreMode_trainer_SSP":
-        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
@@ -411,7 +396,6 @@ def adaptive_main(args):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
-                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -430,14 +414,8 @@ def adaptive_main(args):
                    "max_len": args.max_len,}
     if "Onesite" in args.dataset:
         dataset_att['convert_to_onesite'] = args.convert_to_onesite
-    if args.trainer_fn == "PreMode_trainer_noGraph":
-        trainer_fn = PreMode_trainer_noGraph
-        dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "PreMode_trainer":
+    if args.trainer_fn == "PreMode_trainer":
         trainer_fn = PreMode_trainer
-        dataset_extra_args = {}
-    elif args.trainer_fn == "PreMode_trainer_SSP":
-        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
@@ -576,7 +554,6 @@ def hp_tune(args):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
-                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -652,7 +629,6 @@ def hp_tune(args):
 
 
 def _test(args):
-    import numpy as np
     if args.seed_with_pl:
         import pytorch_lightning as pl
         pl.seed_everything(args.seed)
@@ -681,7 +657,6 @@ def _test(args):
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
-                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -698,14 +673,8 @@ def _test(args):
                    "computed_graph": args.computed_graph,
                    "neighbor_type": args.neighbor_type,
                    "max_len": args.max_len,}
-    if args.trainer_fn == "PreMode_trainer_noGraph":
-        trainer_fn = PreMode_trainer_noGraph
-        dataset_extra_args = {"padding": args.batch_size > 1}
-    elif args.trainer_fn == "PreMode_trainer":
+    if args.trainer_fn == "PreMode_trainer":
         trainer_fn = PreMode_trainer
-        dataset_extra_args = {}
-    elif args.trainer_fn == "PreMode_trainer_SSP":
-        trainer_fn = PreMode_trainer_SSP
         dataset_extra_args = {}
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
@@ -820,7 +789,6 @@ def interpret(args, idxs=None, epoch=None, step=None, dryrun=False, four_fold=Fa
                    "add_sidechain": args.add_sidechain,
                    "add_dssp": args.add_dssp,
                    "add_msa": args.add_msa,
-                   "zero_msa": args.zero_msa,
                    "add_confidence": args.add_confidence,
                    "add_msa_contacts": args.add_msa_contacts,
                    "add_ptm": args.add_ptm,
@@ -900,12 +868,8 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None, dryrun=False
         my_model = create_model(hparams, model_class=model_class)
     else:
         my_model = create_model_and_load(hparams, model_class=model_class)
-    if args.trainer_fn == "PreMode_trainer_noGraph":
-        trainer_fn = PreMode_trainer_noGraph
-    elif args.trainer_fn == "PreMode_trainer":
+    if args.trainer_fn == "PreMode_trainer":
         trainer_fn = PreMode_trainer
-    elif args.trainer_fn == "PreMode_trainer_SSP":
-        trainer_fn = PreMode_trainer_SSP
     else:
         raise ValueError(f"trainer_fn {args.trainer_fn} not supported")
     if args.dataset.startswith("FullGraph") and not args.model.startswith("lora"):

@@ -28,11 +28,11 @@ dnv.table.to.uniprot.by.af2.uniprotID.parallel <- function(
                          score = dnv.table[,Score.column],
                          uniprotID = dnv.table[,uniprotID.column])
   }
-  uniprot_ID.mapping <- read.csv(gzfile('./parse.input.table/swissprot_and_human.full.seq.csv.gz'))
+  uniprot_ID.mapping <- read.csv('./parse.input.table/swissprot_and_human.full.seq.csv')
   # order to make sure first use longest transcript
   # uniprot_ID.mapping <- uniprot_ID.mapping[order(uniprot_ID.mapping$Length, decreasing = T),]
   result <- foreach (i = 1:dim(prompt)[1], .combine = rbind, .multicombine=TRUE) %dopar% {
-    source('./parse.input.table/pparse.variant.wt.sequence.R')
+    source('./parse.input.table/parse.variant.wt.sequence.R')
     substitute_res <- list(ref=NA, pos=NA, alt=NA, wt = NA,
                            sequence = NA, sequence.len = NA,
                            seq.start = NA, seq.end = NA,
@@ -79,7 +79,9 @@ dnv.table.to.uniprot.by.af2.uniprotID.parallel <- function(
     tmp
   }
   stopCluster(cl)
-  result <- dplyr::bind_cols(dnv.table[,!colnames(dnv.table) %in% colnames(result)], result)
+  dnv.table$place.holder <- NA
+  result <- dplyr::bind_cols(result, dnv.table[,!colnames(dnv.table) %in% colnames(result)])
+  result$place.holder <- NULL
   result.noNA <- result[!is.na(result$sequence),]
   output <- list(result=result,
                  result.noNA=result.noNA)

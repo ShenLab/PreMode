@@ -40,7 +40,7 @@ source('./analysis/AUROC.R')
 if (completed) {
   if (task.type == 'GLOF') {
     test.file <- read.csv(paste0(output.dir, '/', gene.name, '.testing.seed.', 0, '.csv'))
-    test.file <- test.file[,-paste0('logits.FOLD.', 0:3)]
+    test.file <- test.file[,!colnames(test.file) %in% paste0('logits.FOLD.', 0:3)]
     for (s in 0:4) {
       tr.res <- read.csv(paste0(output.dir, '/', gene.name, '.training.seed.', s, '.csv'))
       tr.lw.res <- read.csv(paste0(output.dir, '/', gene.name, '.training.seed.', s, '.large.window.csv'))

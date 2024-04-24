@@ -758,4 +758,3 @@ dependencies:
   - zeromq=4.3.5=h59595ed_1
   - zlib=1.2.13=hd590300_5
   - zstd=1.5.5=hfc55251_0
-prefix: /share/descartes/Users/gz2294/miniconda3/envs/r4-base
