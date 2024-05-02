@@ -119,7 +119,21 @@ If no error occurs, it means successful installation.
     + If your `TASK_TYPE` is `DMS` and `MODE_OF_ACTION_N` is 1, then the column `logits` will be the inference results. If your `MODE_OF_ACTION_N` is larger than 1, then you will get multiple columns of `logits.*`, each represent a predicted DMS measurement.
 
 
-# Models & Figures in our manuscript
+# Data, Models & Figures in our manuscript
+## Data
+Here is the list of data used in our manuscript:
+| file | description | 
+| :-: | :-: |
+| `analysis/figs/ALL.csv` | All curated G/LoF variants in ~1300 genes | 
+| `data.files/PTEN/` | PTEN multiplexed deep mutational scan measurements | 
+| `data.files/NUDT15/` | NUDT15 multiplexed deep mutational scan measurements | 
+| `data.files/CCR5/` | CCR5 multiplexed deep mutational scan measurements | 
+| `data.files/CXCR4/` | CXCR4 multiplexed deep mutational scan measurements | 
+| `data.files/GCK/` | GCK multiplexed deep mutational scan measurements | 
+| `data.files/SNCA/` | SNCA multiplexed deep mutational scan measurements | 
+| `data.files/ASPA/` | ASPA multiplexed deep mutational scan measurements | 
+| `data.files/CYP2C9/` | CYP2C9 multiplexed deep mutational scan measurements | 
+
 ## Pretrained Models
 Here is the list of models in our manuscript:
 
