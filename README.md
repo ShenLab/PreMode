@@ -1,5 +1,5 @@
 # PreMode
-This is the repository for our manuscript "PreMode predicts mode-of-action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv: https://www.biorxiv.org/content/10.1101/2024.02.20.581321v2
+This is the repository for our manuscript "PreMode predicts mode-of-action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv: https://www.biorxiv.org/content/10.1101/2024.02.20.581321v3
 
 # Data
 Unfortunately the `data.files/af2.files/`, `data.files/esm.files/`, `data.files/esm.MSA/`, `data.files/gMVP.MSA/` folders are too large to upload to git lfs. We provided those files in huggingface: https://huggingface.co/gzhong/PreMode
