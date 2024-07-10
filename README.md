@@ -15,6 +15,8 @@ Unfortunately we are not allowed to share the HGMD data, so in the `data.files/p
 
 We shared the trained weights of our models trained using HGMD instead. 
 
+For details of the training/testing files, please check `Data, Models & Figures in our manuscript` section below.
+
 # Install Packages
 Please install the necessary packages using 
 ```
@@ -133,6 +135,7 @@ Here is the list of data used in our manuscript:
 | `data.files/SNCA/` | SNCA multiplexed deep mutational scan measurements | 
 | `data.files/ASPA/` | ASPA multiplexed deep mutational scan measurements | 
 | `data.files/CYP2C9/` | CYP2C9 multiplexed deep mutational scan measurements | 
+| `data.files/ICC.seed.*/` | G/LoF variants in 9 genes (named by uniprotID) for training/testing PreMode in our manuscript, 5 random splits | 
 
 ## Pretrained Models
 Here is the list of models in our manuscript:
