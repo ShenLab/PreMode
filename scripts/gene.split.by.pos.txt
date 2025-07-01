@@ -1,0 +1,9 @@
+P15056.split.by.pos
+P21802.split.by.pos
+P07949.split.by.pos
+P04637.split.by.pos
+Q09428.split.by.pos
+O00555.split.by.pos
+Q14654.split.by.pos
+Q99250.split.by.pos
+Q14524.clean.split.by.pos

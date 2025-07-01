@@ -1,0 +1,3 @@
+[1] "min val step (88000) AUC: 0.92 Optimal cutoff: 0.36"
+[1] "end step (88000) AUC: 0.92 Optimal cutoff: 0.36"
+[1] "max AUC step (56000): 0.93 Optimal cutoff: 0.37"

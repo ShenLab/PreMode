@@ -1,0 +1,9 @@
+P15056.split.by.pos.itan
+P21802.split.by.pos.itan
+P07949.split.by.pos.itan
+P04637.split.by.pos.itan
+Q09428.split.by.pos.itan
+O00555.split.by.pos.itan
+Q14654.split.by.pos.itan
+Q99250.split.by.pos.itan
+Q14524.clean.split.by.pos.itan

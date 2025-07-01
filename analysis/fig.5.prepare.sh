@@ -1,0 +1,1 @@
+Rscript fig.5.prepare.2.R PreMode/,PreMode.all/,PreMode.noStructure/,PreMode.noESM/,PreMode.noMSA/,PreMode.ptm/,ESM.SLP/,PreMode.noPretrain/,PreMode.ALL.nogeneoverlap/,PreMode.ALL.nogeneoverlap.large.gene/,PreMode.ALL.itan.only/,PreMode.revision.remove.glof.paralog/,PreMode.revision.remove.all.paralog/

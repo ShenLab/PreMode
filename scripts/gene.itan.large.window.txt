@@ -1,0 +1,9 @@
+P15056.itan.split.large.window
+P21802.itan.split.large.window
+P07949.itan.split.large.window
+P04637.itan.split.large.window
+Q09428.itan.split.large.window
+O00555.itan.split.large.window
+Q14654.itan.split.large.window
+Q99250.itan.split.large.window
+Q14524.clean.itan.split.large.window

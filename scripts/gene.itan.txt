@@ -1,0 +1,9 @@
+P15056.itan.split
+P21802.itan.split
+P07949.itan.split
+P04637.itan.split
+Q09428.itan.split
+O00555.itan.split
+Q14654.itan.split
+Q99250.itan.split
+Q14524.clean.itan.split

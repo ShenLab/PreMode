@@ -1,0 +1,88 @@
+## data set specific
+dataset: GraphMutationDataset
+data_file_train: ./data.files/GCK//training.2.4.csv
+data_file_train_ddp_prefix: ./data.files/GCK/training
+data_file_test: ./data.files/GCK/testing.csv
+data_type: GCK
+loop: true # add self loop or not
+node_embedding_type: esm # esm, one-hot, one-hot-idx, or aa-5dim
+graph_type: af2 # af2 or 1d-neighbor
+add_plddt: true # add plddt or not
+add_conservation: true # add conservation or not
+add_position: true # add positional embeddings or not
+add_sidechain: true # add side chain or not
+use_cb: true
+loaded_msa: true
+add_msa: true # add msa or not
+add_dssp: true # add dssp or not
+alt_type: concat # concat or alt
+computed_graph: true
+max_len: 251
+radius: 50 # radius for KNN graph, larger than curoff_upper
+
+## model specific
+load_model: ./PreMode.results/PreMode.revision.remove.all.paralog/model.step.38000.pt
+model_class: PreMode_Star_CON
+model: equivariant-transformer-star2-softmax
+neighbor_embedding: true
+cutoff_lower: 0.0 # graph related
+cutoff_upper: 36.0 # graph related
+max_num_neighbors: 36 # graph related
+x_in_channels: 1313 # x input size, only used if different from x_channels, 1280 + 1 + 20 + 12
+alt_projector: 2593 # alt input size, 1280 + 1 + 20 + 12 + 1280
+x_in_embedding_type: Linear_gelu # x input embedding type, only used if x_in_channels is not None
+x_channels: 512 # x embedding size
+x_hidden_channels: 512 # x hidden size
+vec_in_channels: 35 # vector embedding size
+vec_channels: 32 # vector hidden size
+vec_hidden_channels: 512 # vector hidden size, must be equal to x_channels (why? go to model page)
+distance_influence: both
+share_kv: false
+num_heads: 16 # number of attention heads
+num_layers: 2
+num_edge_attr: 444 # 1, from msa_contacts
+num_nodes: 1
+num_rbf: 32 # number of radial basis functions, use a small size for quicker training
+rbf_type: expnormunlim
+trainable_rbf: true
+num_workers: 0
+output_model: EquivariantRegressionStarPoolScalar
+reduce_op: mean
+output_dim: 2
+activation: silu
+attn_activation: silu
+# aggr: mean # has to be mean because different protein sizes, removed and set to default (note previous default was add)
+drop_out: 0.1
+
+## training specific
+trainer_fn: PreMode_trainer
+seed: 4
+lr: 1.0e-04 # important
+lr_factor: 0.8 # important
+weight_decay: 0.0
+lr_min: 1.0e-07 # important
+lr_patience: 2 # important
+num_steps_update: 1 # important, how many steps before updating the model, use large number for large batch size
+lr_warmup_steps: 200 # important
+batch_size: 8
+ngpus: 1
+use_lora: 
+num_epochs: 40
+loss_fn: mse_loss
+data_split_fn: ""
+y_weight: 1.0
+contrastive_loss_fn: null
+reset_train_dataloader_each_epoch: true
+test_size: null
+train_size: 0.95
+val_size: 0.05
+
+
+## log specific
+num_save_epochs: 1
+num_save_batches: 400 # save every 1000 batches, this also control the validation frequency
+log_dir: ./PreMode.results/PreMode.revision.remove.all.paralog/TL.GCK.subset.2.seed.4/
+
+loaded_confidence: true
+loaded_esm: true
+convert_to_onesite: true

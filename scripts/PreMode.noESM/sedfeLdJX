@@ -1,0 +1,4 @@
+loaded_msa: true
+loaded_confidence: true
+loaded_esm: true
+convert_to_onesite: true

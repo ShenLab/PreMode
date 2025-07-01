@@ -1,0 +1,15 @@
+archive/
+
+scripts/archive/
+
+analysis/archive/
+
+analysis/results.tar
+
+.vscode/
+.history/
+
+data.files/
+
+copy.files.sh
+zip.files.sh
