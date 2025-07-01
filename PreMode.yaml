@@ -102,6 +102,7 @@ dependencies:
   - decorator=5.1.1=pyhd8ed1ab_0
   - dill=0.3.6=pyhd8ed1ab_1
   - distlib=0.3.7=pyhd8ed1ab_0
+  - dssp=3.0.0=h3fd9d12_4
   - easydict=1.9=py_0
   - exceptiongroup=1.0.4=pyhd8ed1ab_0
   - executing=1.2.0=pyhd8ed1ab_0

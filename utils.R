@@ -4,7 +4,7 @@ get.auc.by.epoch <- function(configs, base.line="uniprotID") {
   num_saved_batches <- floor(ceiling(data.train * configs$train_size / configs$ngpus / configs$batch_size)
                              * configs$num_epochs / configs$num_save_batches) + 1
   epochs <- c(1:(configs$num_epochs))
-  source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
+  source('scripts/AUROC.R')
   library(doParallel)
   cl <- makeCluster(72)
   registerDoParallel(cl)
@@ -191,13 +191,13 @@ get.auc.by.epoch <- function(configs, base.line="uniprotID") {
 }
 
 
-get.auc.by.step <- function(configs, base.line="uniprotID") {
+get.auc.by.step <- function(configs, base.line="uniprotID", save=T) {
   log.dir <- configs$log_dir
   data.train <- as.numeric(strsplit(system(paste0("wc -l ", configs$data_file_train), intern = T), split = " ")[[1]][1])
   num_saved_batches = floor(ceiling(data.train * configs$train_size / configs$ngpus / configs$batch_size)
                             * configs$num_epochs / configs$num_save_batches) + 1
   steps <- c(1:(num_saved_batches-1))*configs$num_save_batches
-  source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
+  source('scripts/AUROC.R')
   library(doParallel)
   cl <- makeCluster(72)
   registerDoParallel(cl)
@@ -373,7 +373,9 @@ get.auc.by.step <- function(configs, base.line="uniprotID") {
       theme_bw() +
       theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
   }
-  ggsave('Loss.AUC.by.step.pdf', p, width = max(6, min(6 * length(steps) / 50, 20)), height = 4)
+  if (save) {
+    ggsave('Loss.AUC.by.step.pdf', p, width = max(6, min(6 * length(steps) / 50, 20)), height = 4)
+  }
   
   print(paste0("min val step (", steps[which(val==min(val))[1]],
                ") AUC: ", round(aucs[which(val==min(val))[1]], digits = 2),
@@ -387,7 +389,7 @@ get.auc.by.step <- function(configs, base.line="uniprotID") {
                "): ", round(max(aucs), digits = 2),
                " Optimal cutoff: ",
                round(optimal.cutoffs[which(aucs==max(aucs))[1]], digits = 2)))
-  res
+  to.plot
 }
 
 
@@ -400,7 +402,7 @@ get.auc.by.step.split.pLDDT <- function(configs, base.line="uniprotID") {
   source('~/Pipeline/uniprot.table.add.annotation.R')
   test.file <- read.csv(configs$data_file_test)
   test.file <- uniprot.table.add.annotation.parallel(test.file, 'pLDDT.region')
-  source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
+  source('scripts/AUROC.R')
   library(doParallel)
   cl <- makeCluster(72)
   registerDoParallel(cl)
@@ -617,7 +619,7 @@ get.R.by.epoch <- function(configs, bin=FALSE) {
   cl <- makeCluster(72)
   registerDoParallel(cl)
   res <- foreach (i = 1:length(epochs), .combine=dplyr::bind_rows) %dopar% {
-    source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
+    source('scripts/AUROC.R')
     i <- epochs[i]
     if (file.exists(paste0(log.dir, 'test_result.epoch.', i, '.csv'))) {
       test.result <- read.csv(paste0(log.dir, 'test_result.epoch.', i, '.csv'))
@@ -631,19 +633,16 @@ get.R.by.epoch <- function(configs, bin=FALSE) {
                         filename=paste0(log.dir, 'test_result.epoch.', i, '.pdf'))
       # val_losses <- c()
       # train_losses <- c()
-      rank <- 0
-      val_dic <- jsonlite::read_json(paste0(log.dir, 'result_dict.epoch.', i-1, '.ddp_rank.', rank, '.json'))
-      # val_losses <- c(val_losses, val_dic$val_loss)
-      # train_losses <- c(train_losses, val_dic$train_loss)
-      res <- data.frame(epochs = i,
-                        train_loss = val_dic$val_loss,
-                        val_loss = val_dic$train_loss,
-                        R2s=t(as.data.frame(result$R2)))
+      R2s <- t(as.data.frame(result$R2))
     } else {
-      res <- data.frame(epochs = NA,
-                        train_loss = NA,
-                        val_loss = NA)
+      R2s <- NA
     }
+    rank <- 0
+    val_dic <- jsonlite::read_json(paste0(log.dir, 'result_dict.epoch.', i-1, '.ddp_rank.', rank, '.json'))
+    res <- data.frame(epochs = i,
+                      train_loss = val_dic$train_loss,
+                      val_loss = val_dic$val_loss,
+                      R2s=R2s)
     res
   }
   stopCluster(cl)
@@ -667,19 +666,26 @@ get.R.by.epoch <- function(configs, bin=FALSE) {
                                     label=paste0('assay.', i)))
     }
     library(ggplot2)
-    p <- ggplot(to.plot, aes(x=epoch)) +
-      geom_line(aes(y=loss, col=metric_name)) +
-      geom_line(data = to.plot.2, aes(y=R2, col=label)) +
-      scale_y_continuous(
-        # Features of the first axis
-        name = "Loss", breaks = round(seq(min(to.plot$loss)-0.5, max(to.plot$loss)+0.5, by = 0.1), 1),
-        # Add a second axis and specify its features
-        sec.axis = sec_axis(~ . , name="R", breaks = round(seq(min(R2s), max(R2s), by = 0.1), 1))
-      ) +
-      scale_x_continuous(breaks = seq(1, configs$num_epochs, by = 1)) +
-      theme_bw() +
-      theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-    
+    if (all(is.na(to.plot.2$R2))) {
+      p <- ggplot(to.plot, aes(x=epoch)) +
+        geom_line(aes(y=loss, col=metric_name)) +
+        scale_x_continuous(breaks = seq(1, configs$num_epochs, by = 1)) +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+    } else {
+      p <- ggplot(to.plot, aes(x=epoch)) +
+        geom_line(aes(y=loss, col=metric_name)) +
+        geom_line(data = to.plot.2, aes(y=R2, col=label)) +
+        scale_y_continuous(
+          # Features of the first axis
+          name = "Loss", breaks = round(seq(min(to.plot$loss)-0.5, max(to.plot$loss)+0.5, by = 0.1), 1),
+          # Add a second axis and specify its features
+          sec.axis = sec_axis(~ . , name="R", breaks = round(seq(min(R2s), max(R2s), by = 0.1), 1))
+        ) +
+        scale_x_continuous(breaks = seq(1, configs$num_epochs, by = 1)) +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+    }
     print(paste0("min val epoch R: ", round(R2s[which(val==min(val)),], digits = 100)))
     print(paste0("end epoch R: ", round(R2s[dim(R2s)[1],], digits = 100)))
     ggsave('Loss.R.by.epoch.pdf', p, width = min(49.9, 9 * length(epochs) / 10), height = 6)
@@ -703,7 +709,7 @@ get.R.by.step <- function(configs, bin=FALSE) {
   registerDoParallel(cl)
   
   res <- foreach (i = 1:length(steps), .combine = dplyr::bind_rows) %dopar% {
-    source('/share/pascal/Users/gz2294/Pipeline/AUROC.R')
+    source('scripts/AUROC.R')
     i <- steps[i]
     if (file.exists(paste0(log.dir, 'test_result.step.', i, '.csv'))) {
       test.result <- read.csv(paste0(log.dir, 'test_result.step.', i, '.csv'))

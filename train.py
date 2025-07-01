@@ -13,7 +13,7 @@ from types import SimpleNamespace as sn
 import data
 from model import model
 from model.model import create_model, create_model_and_load
-from model.trainer import data_distributed_parallel_gpu, PreMode_trainer, single_thread_gpu, ray_tune, single_thread_gpu_4_fold
+from model.trainer import data_distributed_parallel_gpu, PreMode_trainer, single_thread_gpu, ray_tune, single_thread_gpu_4_fold, multiple_thread_gpu_4_fold
 from utils.configs import save_argparse, LoadFromFile
 from captum.attr import IntegratedGradients
 from functools import partial
@@ -60,6 +60,8 @@ def get_args():
                         help='Whether to use CB as distance or not')
     parser.add_argument('--add-msa', type=bool, default=False,
                         help='Whether to add msa to features or not')
+    parser.add_argument('--zero-msa', type=bool, default=False,
+                        help='Whether to make msa zero')
     parser.add_argument('--add-msa-contacts', type=bool, default=True,
                         help='Whether to add msa contacts to features or not')
     parser.add_argument('--add-confidence', type=bool, default=False,
@@ -337,7 +339,7 @@ def main(args, continue_train=False, four_fold=False):
                 continue
             else:
                 break
-        if i == args.num_epochs - 1:
+        if i == args.num_epochs:
             print(f"model for epoch {args.num_epochs} already exists")
             return
         if i == 0:
@@ -348,11 +350,19 @@ def main(args, continue_train=False, four_fold=False):
     else:
         check_point_epoch = None
     if args.ngpus > 1:
-        assert four_fold is False, "fold 4 is not supported in distributed training"
-        mp.spawn(data_distributed_parallel_gpu,
-                    args=(my_model, args, dataset_att, dataset_extra_args, trainer_fn, check_point_epoch),
-                    nprocs=args.ngpus,
-                    join=True)
+        # assert four_fold is False, "fold 4 is not supported in distributed training"
+        if four_fold:
+            dataset = getattr(data, args.dataset)(
+                data_file=args.data_file_train,
+                **dataset_att,
+                **dataset_extra_args,
+            )
+            multiple_thread_gpu_4_fold(args.gpu_id, my_model, args, dataset, trainer_fn, check_point_epoch)
+        else:
+            mp.spawn(data_distributed_parallel_gpu,
+                        args=(my_model, args, dataset_att, dataset_extra_args, trainer_fn, check_point_epoch),
+                        nprocs=args.ngpus,
+                        join=True)
     else:
         dataset = getattr(data, args.dataset)(
             data_file=args.data_file_train,
@@ -706,7 +716,6 @@ def _test(args):
 
     if "batch" in args.test_by:
         # test by batch steps
-        import numpy as np
         train_data_size = subprocess.check_output(f'wc -l {args.data_file_train}', shell=True)
         train_data_size = int(str(train_data_size).split(' ')[0][2:]) - 1
         num_saved_batches = int(np.floor(np.ceil(np.ceil(train_data_size * args.train_size)
@@ -885,6 +894,9 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None, dryrun=False
     if not args.hp_tune:
         # only load model if not hp_tune
         if epoch is not None:
+            # if epoch is -1, load the last epoch
+            if epoch == -1:
+                epoch = args.num_epochs
             trainer.load_model(epoch=epoch)
             min_loss = None
         elif step is not None:
@@ -971,6 +983,67 @@ def interpret_core(args, dataset, idxs=None, epoch=None, step=None, dryrun=False
                             with open(f"{args.log_dir}/result_dict.batch.{step}.ddp_rank.{rank}.json", "r") as f:
                                 result_dict = json.load(f)
                                 val_loss.append(result_dict["val_loss"])
+                        else:
+                            val_loss.append(np.nan)
+                    val_losses.append(np.mean(val_loss))
+                if len(np.array(val_losses)[~np.isnan(val_losses)]) > 0:
+                    # remove nan values steps
+                    steps = np.array(steps)[~np.isnan(val_losses)]
+                    # remove nan values val_losses
+                    val_losses = np.array(val_losses)[~np.isnan(val_losses)]
+                    min_val_loss_batch = steps[np.argmin(val_losses)]
+                    min_batch_loss = np.min(val_losses)
+                    min_loss = min(min_epoch_loss, min_batch_loss)
+                else:
+                    min_loss = min_epoch_loss
+                if len(np.array(val_losses)[~np.isnan(val_losses)]) == 0 or min_epoch_loss < min_batch_loss:
+                    print(f"min_val_loss_epoch: {min_val_loss_epoch}, loss: {min_epoch_loss}")
+                    if dryrun:
+                        print("dryrun mode, skip interpret")
+                        return
+                    trainer.load_model(epoch=min_val_loss_epoch)
+                else:
+                    print(f"min_val_loss_batch: {min_val_loss_batch}, loss: {min_batch_loss}")
+                    if dryrun:
+                        print("dryrun mode, skip interpret")
+                        return
+                    trainer.load_model(step=min_val_loss_batch)
+            elif args.interpret_by == "both_train_val":
+                # find the min val loss epoch
+                val_losses = []
+                for epoch in range(args.num_epochs):
+                    val_loss = []
+                    for rank in range(args.ngpus):
+                        if os.path.exists(f"{args.log_dir}/result_dict.epoch.{epoch}.ddp_rank.{rank}.json"):
+                            try:
+                                with open(f"{args.log_dir}/result_dict.epoch.{epoch}.ddp_rank.{rank}.json", "r") as f:
+                                    result_dict = json.load(f)
+                                    val_loss.append(result_dict["val_loss"] + result_dict["train_loss"])
+                            except:
+                                print(f"error in file {args.log_dir}/result_dict.epoch.{epoch}.ddp_rank.{rank}.json")
+                        else:
+                            val_loss.append(np.nan)
+                    val_losses.append(np.mean(val_loss))
+                min_val_loss_epoch = np.argmin(val_losses) + 1
+                min_epoch_loss = np.min(val_losses)
+                # find the min val loss batch
+                val_losses = []
+                train_data_size = subprocess.check_output(f'wc -l {args.data_file_train}', shell=True)
+                train_data_size = int(str(train_data_size).split(' ')[0][2:]) - 1
+                num_saved_batches = int(np.floor(np.ceil(np.ceil(train_data_size * args.train_size)
+                                                        / args.ngpus / args.batch_size)
+                                                * args.num_epochs / args.num_save_batches) + 1)
+                print(f'num_saved_batches: {num_saved_batches}')
+                steps = list(range(args.num_save_batches,
+                                   num_saved_batches * args.num_save_batches,
+                                   args.num_save_batches))
+                for step in steps:
+                    val_loss = []
+                    for rank in range(args.ngpus):
+                        if (os.path.exists(f"{args.log_dir}/result_dict.batch.{step}.ddp_rank.{rank}.json")):
+                            with open(f"{args.log_dir}/result_dict.batch.{step}.ddp_rank.{rank}.json", "r") as f:
+                                result_dict = json.load(f)
+                                val_loss.append(result_dict["val_loss"] + result_dict["train_loss"])
                         else:
                             val_loss.append(np.nan)
                     val_losses.append(np.mean(val_loss))

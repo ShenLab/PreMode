@@ -4,6 +4,8 @@ This is the repository for our manuscript "PreMode predicts mode-of-action of mi
 # Data
 Unfortunately the `data.files/af2.files/`, `data.files/esm.files/`, `data.files/esm.MSA/`, `data.files/gMVP.MSA/` folders are too large to upload to git lfs. We provided those files in huggingface: https://huggingface.co/gzhong/PreMode
 
+The `data.files/af2.files/`, 
+
 You can either clone this repository or the huggingface repository.
 
 Then, unzip the files with this script: 
@@ -30,6 +32,13 @@ conda activate PreMode
 python train.py --conf scripts/TEST.yaml --mode train
 ```
 If no error occurs, it means successful installation.
+
+You also need to install DSSP: . Then you need to check your DSSP installation path:
+```
+which mkdssp
+```
+And paste the path to `DSSP_PATH` in the line 42 of `data/utils.py` file.
+
 
 # New Experiment 
 ## Start from scratch and use our G/LoF datasets
@@ -86,6 +95,7 @@ If no error occurs, it means successful installation.
       + `ENST` (optional): same as above.
       + `wt.orig`: the wild type protein sequence, in the uniprot format.
       + `sequence.len.orig`: the wild type protein sequence length.
+      + (Optional) `af2_file`: the alphafold2 file.
 
     + If you prepared your input in Format 1, please run 
         ```

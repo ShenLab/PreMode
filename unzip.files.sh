@@ -3,6 +3,7 @@ cd data.files/
 cat esm.files.tgz.part-* | tar -xzvf -
 cat esm.MSA.tgz.part-* | tar -xzvf -
 cat gMVP.MSA.tgz.part-* | tar -xzvf -
+cat pretrain.tgz.part-* | tar -xzvf -
 for tgzfile in `ls *.tgz`; do echo "Unzipping $tgzfile"; tar -xzvf $tgzfile; done
 for gzfile in `ls pretrain/*.gz`; do echo "Unzipping $gzfile"; gunzip $gzfile; done
 cd ../
@@ -18,6 +19,7 @@ for gzfiles in `ls analysis/5genes.all.mut/*.gz`; do echo "Unzipping $gzfiles"; 
 for gzfiles in `ls analysis/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
 # unzip files in the analysis/*/ folder
 for gzfiles in `ls analysis/PreMode/*/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
+for gzfiles in `ls analysis/PreMode.all/*/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
 for gzfiles in `ls analysis/PreMode.noESM/*/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
 for gzfiles in `ls analysis/PreMode.noMSA/*/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
 for gzfiles in `ls analysis/PreMode.noPretrain/*/*.gz`; do echo "Unzipping $gzfiles"; gunzip $gzfiles; done
