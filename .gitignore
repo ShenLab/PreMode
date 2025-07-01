@@ -9,7 +9,8 @@ analysis/results.tar
 .vscode/
 .history/
 
-data.files/
+data.files/*gz*
+data.files/pretrain/
 
 copy.files.sh
 zip.files.sh
