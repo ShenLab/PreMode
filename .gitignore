@@ -15,4 +15,4 @@ data.files/pretrain/
 copy.files.sh
 zip.files.sh
 
-to_huggingface/
+huggingface/

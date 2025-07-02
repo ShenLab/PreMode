@@ -1,9 +1,9 @@
 # download files from huggingface
-mkdir -p to_huggingface
-huggingface-cli download ghong/PreMode.Data --local-dir to_huggingface --local-dir-use-symlinks False
+mkdir -p huggingface
+huggingface-cli download gzhong/PreMode.Data --local-dir huggingface --local-dir-use-symlinks False
 # move files to data.files/
-mv to_huggingface/data.files/* data.files/
-mv to_huggingface/analysis/* analysis/
+mv huggingface/data.files/* data.files/
+mv huggingface/analysis/* analysis/
 # untar the files for analysis/results.tar
 cd analysis/
 tar -xvf results.tar
