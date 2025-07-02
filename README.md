@@ -2,15 +2,11 @@
 This is the repository for our manuscript "PreMode predicts mode-of-action of missense variants by deep graph representation learning of protein sequence and structural context" posted on bioRxiv: https://www.biorxiv.org/content/10.1101/2024.02.20.581321v3
 
 # Data
-Unfortunately the `data.files/af2.files/`, `data.files/esm.files/`, `data.files/esm.MSA/`, `data.files/gMVP.MSA/` folders are too large to upload to git lfs. We provided those files in huggingface: https://huggingface.co/gzhong/PreMode
+Unfortunately the `data.files/`, `analysis/` folders are too large to upload to git lfs. We provided those files in huggingface: https://huggingface.co/gzhong/PreMode.Data
 
-The `data.files/af2.files/`, 
-
-You can either clone this repository or the huggingface repository.
-
-Then, unzip the files with this script: 
+You can download and unzip the files with this script: 
 ```
-bash unzip.files.sh
+bash download.data.sh
 ```
 
 Unfortunately we are not allowed to share the HGMD data, so in the `data.files/pretrain/training.*` files we removed all the pathogenic variants from HGMD (49218 in total). This might affect the plots of `analysis/figs/fig.sup.12.pdf` and `analysis/figs/fig.sup.13.pdf` if you re-run the R codes in `analysis/` folder.
