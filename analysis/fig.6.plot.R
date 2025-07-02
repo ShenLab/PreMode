@@ -2,7 +2,7 @@
 library(ggplot2)
 library(bio3d)
 library(patchwork)
-dssp.exec <- '/share/vault/Users/gz2294/miniconda3/bin/mkdssp'
+dssp.exec <- '/share/vault/Users/gz2294/miniconda3/envs/RESCVE/bin/mkdssp' # Change to your dssp executable path
 genes <- c("P15056", "P07949", "P04637", "Q14654")
 gene.names <- c("BRAF", "RET", "TP53","KCNJ11")
 use.lw.df <- readRDS('figs/fig.5a.plot.RDS')

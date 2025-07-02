@@ -24,7 +24,7 @@ for (seed in 0:4) {
   write.csv(icc.train[,c('uniprotID', 'score')], train.tmp)
   write.csv(icc.test[,c('uniprotID', 'score')], test.tmp)
   
-  rf.command <- paste0('/share/descartes/Users/gz2294/miniconda3/envs/r4-base/bin/python ', 'random.forest.process.classifier.py ', 
+  rf.command <- paste0('/share/vault/Users/gz2294/miniconda3/envs/r4-base/bin/python ', 'random.forest.process.classifier.py ', 
                        train.tmp, ' ',
                        test.tmp)
   rf.result <- system(rf.command, intern = T)
@@ -44,7 +44,7 @@ for (seed in 1:4) {
     test.tmp <- tempfile()
     write.csv(icc.train[,c('uniprotID', 'score')], train.tmp)
     write.csv(icc.test[,c('uniprotID', 'score')], test.tmp)
-    rf.command <- paste0('/share/descartes/Users/gz2294/miniconda3/envs/r4-base/bin/python ', 'random.forest.process.classifier.py ',
+    rf.command <- paste0('/share/vault/Users/gz2294/miniconda3/envs/r4-base/bin/python ', 'random.forest.process.classifier.py ',
                          train.tmp, ' ',
                          test.tmp)
     rf.result <- system(rf.command, intern = T)

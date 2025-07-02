@@ -39,7 +39,10 @@ MSA_ATTN_DATA_PATH = './data.files/esm.MSA/'
 NUM_THREADS = 42
 # TEMP dir for DSSP
 TMPDIR = './tmp/'
-DSSP_PATH = "/share/vault/Users/gz2294/miniconda3/envs/RESCVE/bin/mkdssp"
+# create tmp dir if not exists
+if not exists(TMPDIR):
+    os.makedirs(TMPDIR)
+DSSP_PATH = "/share/vault/Users/gz2294/miniconda3/envs/RESCVE/bin/mkdssp" # path to mkdssp binary, please change it to your own path
 # prepare esm2 embeddings
 with open(f'./utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl', 'rb') as f:
     LANGUAGE_MODEL = pickle.load(f)

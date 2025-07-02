@@ -24,6 +24,11 @@ varall <- varall[used_in_functional_prediction%in%1]
 varall <- varall[prd_mech_revised%in%c("lof", "gof")]
 # remove duplicate sites:
 varall <- varall[!duplicated(varall[,c("gene", "altAA", "pos")])]
+
+
+########## IMPORTANT: Please change the python path in the ./funNCion/R_functions4predicting_goflof_CACNA1SCN.R file, line 253, to your python path ###############
+
+
 source("./funNCion/R_functions4predicting_goflof_CACNA1SCN.R")
 # for three genes, first only visualize seed 0
 result.plot <- data.frame()

@@ -1,5 +1,5 @@
 library(ggplot2)
-py.path = '/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/bin/python'
+py.path = '/share/vault/Users/gz2294/miniconda3/envs/RESCVE/bin/python'
 task.dic <- list("PTEN"=c("score.1"="stability", "score.2"="enzyme.activity"), 
                  "NUDT15"=c("score.1"="stability", "score.2"="enzyme.activity"), 
                  "CCR5"=c("score.1"="stability", "score.2"="binding Ab2D7", "score.3"="binding HIV-1"), 

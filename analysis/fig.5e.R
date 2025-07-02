@@ -10,6 +10,7 @@ source('./prepare.biochem.R')
 ALL <- read.csv('figs/ALL.csv', row.names = 1, na.strings = c('.', 'NA'))
 ALL <- prepare.unique.id(ALL)
 pick.cond <- 'auc'
+if (!file.exists('figs/fig.5e.prepare.csv')) {
 for (i in 1:length(genes)) {
   gene <- genes[i]
   for (subset in c(1,2,4,6,8)) {
@@ -107,6 +108,7 @@ for (i in 1:length(genes)) {
   }
 }
 write.csv(summary.df, file = 'figs/fig.5e.prepare.csv')
+}
 library(ggplot2)
 
 summary.df <- read.csv('figs/fig.5e.prepare.csv', row.names = 1)

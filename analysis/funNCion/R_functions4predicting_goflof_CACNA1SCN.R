@@ -250,7 +250,7 @@ predictgof_manual_split <- function(trainingall, testing, modeltype, alignmentfi
   #                           method = modeltype,
   #                           trControl = fitControl,
   #                           verbose = T)
-  res <- system('/share/vault/Users/gz2294/miniconda3/envs/RESCVE/bin/python /share/vault/Users/gz2294/PreMode.ShenLab.git/analysis/funNCion/sklearn.gbm.py training.fuNCion.csv testing.fuNCion.csv',
+  res <- system('/share/vault/Users/gz2294/miniconda3/envs/r4-base/bin/python ./funNCion/sklearn.gbm.py training.fuNCion.csv testing.fuNCion.csv',
                 intern = T)
   starttime <- as.character(Sys.time())
   print(c("finish training at", starttime), quote = F)

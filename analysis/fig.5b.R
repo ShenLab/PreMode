@@ -48,12 +48,11 @@ for (g in uniq.genes) {
 }
 
 
-result.plot <- result.plot[result.plot$model %in% c("PreMode/", "PreMode.ALL.nogeneoverlap/",
+result.plot <- result.plot[result.plot$model %in% c("PreMode/", 
                                                     "Itan.1"),]
 result.plot$task.name[result.plot$task.id == "Q14524.clean.itan.split"] <- "Gene: SCN5A"
 model.dic <- c("PreMode/"="1: PreMode",
-               "Itan.1"="2: LoGoFunc",
-               "PreMode.ALL.nogeneoverlap/"="2: PreMode: all genes\nno gene overlap")
+               "Itan.1"="2: LoGoFunc")
 result.plot$model <- model.dic[result.plot$model]
 num.models <- length(unique(result.plot$model))
 p1 <- ggplot(result.plot, aes(y=auc, x=task.name, col=model)) +

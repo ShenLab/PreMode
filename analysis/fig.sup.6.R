@@ -1,6 +1,6 @@
 library(ggplot2)
 task.dic <- list("Stab"=c("score.1"="stability.1", "score.2"="stability.2"))
-py.path <- '/share/descartes/Users/gz2294/miniconda3/envs/RESCVE/bin/python'
+py.path <- '/share/vault/Users/gz2294/miniconda3/envs/RESCVE/bin/python'
 alphabet_premode <- c('L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D',
               'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C')
 genes <- c("Stab")

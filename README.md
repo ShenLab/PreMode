@@ -35,6 +35,17 @@ which mkdssp
 ```
 And paste the path to `DSSP_PATH` in the line 42 of `data/utils.py` file.
 
+Optional: To reproduce the figures in the paper, you need to change those files with the corresponding python/dssp path:
+  - utils.R, line 116, 309, 529
+  - analysis/funNCion/R_functions4predicting_goflof_CACNA1SCN.R, line 153, 253
+  - analysis/fig.4c.R, line 2
+  - analysis/fig.5.prepare.2.R, line 2
+  - analysis/fig.5e.R, line 5
+  - analysis/fig.6.plot.R, line 5
+  - analysis/fig.sup.6.R, line 3
+  - analysis/fig.sup.7.R, line 27, line 47
+  - analysis/fig.sup.12.R, line 32
+  - analysis/fig.sup.13.R, line 28
 
 # New Experiment 
 ## Start from scratch and use our G/LoF datasets

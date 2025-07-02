@@ -1,5 +1,5 @@
 source('../utils.R')
-configs <- yaml::read_yaml('../../PreMode/scripts/CHPs.v4.retrain/pretrain.seed.0.yaml')
+configs <- yaml::read_yaml('../scripts/PreMode/pretrain.seed.0.yaml')
 to.plot <- get.auc.by.step(configs, base.line=F)
 num_saved_batches <- 35
 p <- ggplot(to.plot, aes(x=step)) +
