@@ -2,6 +2,7 @@ name: PreMode
 channels:
   - schrodinger
   - anaconda
+  - salilab
   - nvidia
   - conda-forge
   - pytorch
@@ -9,6 +10,8 @@ channels:
   - defaults
   - primer
   - r
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
 dependencies:
   - _ipython_minor_entry_point=8.7.0=h8cf3c4a_0
   - _libgcc_mutex=0.1=conda_forge
@@ -61,14 +64,14 @@ dependencies:
   - bzip2=1.0.8=h7f98852_4
   - c-ares=1.18.1=h7f98852_0
   - c-blosc2=2.11.2=hb4ffafa_0
-  - ca-certificates=2024.2.2=hbcca054_0
+  - ca-certificates=2024.12.14=hbcca054_0
   - cached-property=1.5.2=hd8ed1ab_1
   - cached_property=1.5.2=pyha770c72_1
   - cachetools=5.2.0=pyhd8ed1ab_0
   - cairo=1.16.0=h18b612c_1001
   - captum=0.6.0=0
   - celery=5.3.4=pyhd8ed1ab_1
-  - certifi=2024.2.2=pyhd8ed1ab_0
+  - certifi=2024.12.14=pyhd8ed1ab_0
   - cffi=1.15.1=py39he91dace_2
   - cfitsio=4.2.0=hd9d235c_0
   - charls=2.3.4=h9c3ff4c_0
@@ -223,14 +226,15 @@ dependencies:
   - libevent=2.1.10=h28343ad_4
   - libffi=3.4.2=h7f98852_5
   - libflac=1.4.2=h27087fc_0
-  - libgcc-ng=12.2.0=h65d4601_19
+  - libgcc=14.2.0=h77fa898_1
+  - libgcc-ng=14.2.0=h69a702a_1
   - libgcrypt=1.10.1=h166bdaf_0
   - libgd=2.3.3=h6a678d5_3
   - libgfortran-ng=12.2.0=h69a702a_19
   - libgfortran5=12.2.0=h337968e_19
   - libglib=2.74.1=h606061b_1
   - libglu=9.0.0=he1b5a44_1001
-  - libgomp=12.2.0=h65d4601_19
+  - libgomp=14.2.0=h77fa898_1
   - libgoogle-cloud=2.8.0=h3c06191_0
   - libgpg-error=1.45=hc0c96e0_0
   - libgrpc=1.51.1=hcf146ea_3
@@ -314,14 +318,14 @@ dependencies:
   - nss=3.82=he02c5a1_0
   - numba=0.58.1=py39h615d6bd_0
   - numcodecs=0.12.1=py39h3d6467e_0
-  - numpy=1.23.5=py39h3d75532_0
+  - numpy=1.26.4=py39h474f0d3_0
   - nvidia-ml-py=12.535.133=pyhd8ed1ab_0
   - oauth2client=4.1.3=py_0
   - oauthlib=3.2.2=pyhd8ed1ab_0
   - opencensus=0.11.3=pyhd8ed1ab_0
   - opencensus-context=0.1.3=py39hf3d152e_2
   - openjpeg=2.5.0=h7d73246_1
-  - openssl=3.2.1=hd590300_0
+  - openssl=3.4.0=h7b32b05_1
   - opt_einsum=3.3.0=pyhc1e730c_2
   - orc=1.8.2=hfdbbad2_2
   - packaging=22.0=pyhd8ed1ab_0
@@ -341,6 +345,8 @@ dependencies:
   - pluggy=1.0.0=pyhd8ed1ab_5
   - ply=3.11=py_1
   - pmw=2.0.1+3=py_3
+  - pooch=1.8.1=pyhd8ed1ab_0
+  - prody=2.4.0=py39h227be39_0
   - prometheus_client=0.13.1=pyhd8ed1ab_0
   - prompt-toolkit=3.0.36=pyha770c72_0
   - prompt_toolkit=3.0.36=hd8ed1ab_0
@@ -351,6 +357,7 @@ dependencies:
   - pulseaudio=16.1=h126f2b6_0
   - pure_eval=0.2.2=pyhd8ed1ab_0
   - py-spy=0.3.14=h87a5ac0_0
+  - py3dmol=2.1.0=pyhd8ed1ab_0
   - pyarrow=11.0.0=py39hf0ef2fd_9_cpu
   - pyasn1=0.4.8=py_0
   - pyasn1-modules=0.2.7=py_0
@@ -361,7 +368,6 @@ dependencies:
   - pyflakes=3.0.1=pyhd8ed1ab_0
   - pygments=2.13.0=pyhd8ed1ab_0
   - pyjwt=2.6.0=pyhd8ed1ab_0
-  - pymol=2.5.4=py39he7683a9_0
   - pynndescent=0.5.10=pyh1a96a4e_0
   - pyopenssl=22.1.0=pyhd8ed1ab_0
   - pyparsing=3.0.9=pyhd8ed1ab_0
@@ -406,13 +412,12 @@ dependencies:
   - requests-oauthlib=1.3.1=pyhd8ed1ab_0
   - responses=0.18.0=pyhd8ed1ab_0
   - retry_decorator=1.1.1=pyh9f0ad1d_0
-  - rigimol=1.3=2
   - rsa=4.9=pyhd8ed1ab_0
   - s2n=1.3.41=h3358134_0
   - sacremoses=0.0.53=pyhd8ed1ab_0
   - scikit-image=0.22.0=py39hddac248_2
   - scikit-learn=1.2.0=py39h86b2a18_0
-  - scipy=1.9.3=py39hddc5342_2
+  - scipy=1.10.1=py39h6183b62_3
   - seaborn=0.12.2=py39h06a4308_0
   - setproctitle=1.2.2=py39hb9d737c_2
   - setuptools=59.5.0=py39hf3d152e_0
@@ -490,8 +495,9 @@ dependencies:
   - zstd=1.5.5=hfc55251_0
   - pip:
       - cmake==3.27.7
-      - dllogger==1.0.0
       - fair-esm==2.0.0
       - lit==17.0.4
       - loralib==0.1.2
-      - triton==2.1.0
+      - nrgten==1.2.9
+      - pyvcon==1.0.2
+      - triton==2.0.0
